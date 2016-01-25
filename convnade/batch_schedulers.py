@@ -29,7 +29,8 @@ class MiniBatchSchedulerWithAutoregressiveMask(MiniBatchScheduler):
         super().__init__(dataset, batch_size)
 
         self.concatenate_mask = concatenate_mask
-        self.rng = np.random.RandomState(seed)
+        self.seed = seed
+        self.rng = np.random.RandomState(self.seed)
         self.keep_mask = keep_mask
 
         # Allocate memory for the autoregressive mask.
@@ -75,7 +76,7 @@ class MiniBatchSchedulerWithAutoregressiveMask(MiniBatchScheduler):
         D = self.mask_shape[1]
         d = self.rng.randint(D, size=(self.mask_shape[0], 1))
         masks_o_lt_d = np.arange(D) < d
-        map(self.rng.shuffle, masks_o_lt_d)  # Inplace shuffling each row.
+        list(map(self.rng.shuffle, masks_o_lt_d))  # Inplace shuffling each row.
         return masks_o_lt_d
 
     def __iter__(self):
@@ -89,6 +90,7 @@ class MiniBatchSchedulerWithAutoregressiveMask(MiniBatchScheduler):
 
     def save(self, savedir):
         state = {"version": 1,
+                 "seed": self.seed,
                  "batch_size": self.batch_size,
                  "shared_batch_count": self.shared_batch_count.get_value(),
                  "rng": pickle.dumps(self.rng),

@@ -1,5 +1,7 @@
 from __future__ import division
 
+from collections import OrderedDict
+
 import pickle
 import theano
 import theano.tensor as T
@@ -409,7 +411,7 @@ class DeepModel(Model):
 
     @property
     def hyperparams(self):
-        hyperparams = {}
+        hyperparams = OrderedDict()
         for i, layer in enumerate(self.layers):
             for k, v in layer.hyperparams.items():
                 hyperparams[self.name + "layer{0}_{1}".format(i, k)] = v
@@ -418,7 +420,7 @@ class DeepModel(Model):
 
     @property
     def params(self):
-        params = {}
+        params = OrderedDict()
         for i, layer in enumerate(self.layers):
             for k, v in layer.params.items():
                 # TODO: Changing the variable name till first smartpy's PR is merged.
@@ -429,14 +431,7 @@ class DeepModel(Model):
 
     @property
     def parameters(self):
-        parameters = []
-        for i, layer in enumerate(self.layers):
-            # for k, v in layer.params.items():
-            #     v.name = self.name + "layer{0}_{1}".format(i, k)
-            #     parameters.append(v)
-            parameters += layer.parameters
-
-        return parameters
+        return list(self.params.values())
 
     def initialize(self, weights_initializer=initer.UniformInitializer(random_seed=1234)):
         for layer in self.layers:
@@ -506,7 +501,7 @@ class DeepConvNADE(Model):
     @property
     def hyperparams(self):
         #hyperparams = super(DeepConvNADE, self).hyperparams
-        hyperparams = {}
+        hyperparams = OrderedDict()
         hyperparams.update(self.convnet.hyperparams)
         hyperparams.update(self.fullnet.hyperparams)
         hyperparams['image_shape'] = self.image_shape
@@ -518,7 +513,7 @@ class DeepConvNADE(Model):
     @property
     def params(self):
         #params = super(DeepConvNADE, self).params
-        params = {}
+        params = OrderedDict()
         params.update(self.convnet.params)
         params.update(self.fullnet.params)
         return params
@@ -604,7 +599,8 @@ class DeepConvNADE(Model):
 
             nb_input_feature_maps = self.nb_channels
             if self.consider_mask_as_channel:
-                nb_input_feature_maps += 1
+                # nb_input_feature_maps += 1
+                nb_input_feature_maps = 2
                 if mask_o_lt_d.ndim == 1:
                     # TODO: changed this hack
                     input_masked = T.concatenate([input_masked, T.ones_like(input_masked)*mask_o_lt_d], axis=1)

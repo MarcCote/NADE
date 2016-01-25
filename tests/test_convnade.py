@@ -605,9 +605,90 @@ def test_save_load_convnade():
     assert_array_almost_equal(logger1.get_variable_history(1), logger2a.get_variable_history(1)+logger2b.get_variable_history(1))
 
 
+def test_new_fprop_matches_old_fprop():
+    nb_kernels = 8
+    kernel_shape = (2, 2)
+    hidden_activation = "sigmoid"
+    consider_mask_as_channel = True
+    batch_size = 1024
+    ordering_seed = 1234
+    max_epoch = 10
+    nb_orderings = 1
+
+    print("Will train Convoluational Deep NADE for a total of {0} epochs.".format(max_epoch))
+
+    with Timer("Loading/processing binarized MNIST"):
+        trainset, validset, testset = load_binarized_mnist()
+
+        # Extract the center patch (4x4 pixels) of each image.
+        indices_to_keep = [348, 349, 350, 351, 376, 377, 378, 379, 404, 405, 406, 407, 432, 433, 434, 435]
+
+        trainset = Dataset(trainset.inputs.get_value()[:, indices_to_keep], trainset.inputs.get_value()[:, indices_to_keep], name="trainset")
+        validset = Dataset(validset.inputs.get_value()[:, indices_to_keep], validset.inputs.get_value()[:, indices_to_keep], name="validset")
+        testset = Dataset(testset.inputs.get_value()[:, indices_to_keep], testset.inputs.get_value()[:, indices_to_keep], name="testset")
+
+        image_shape = (4, 4)
+        nb_channels = 1 + (consider_mask_as_channel is True)
+
+    with Timer("Building model"):
+        builder = DeepConvNADEBuilder(image_shape=image_shape,
+                                      nb_channels=nb_channels,
+                                      consider_mask_as_channel=consider_mask_as_channel)
+
+        convnet_blueprint = "64@2x2(valid) -> 1@2x2(full)"
+        fullnet_blueprint = "5 -> 16"
+        print("Convnet:", convnet_blueprint)
+        print("Fullnet:", fullnet_blueprint)
+        builder.build_convnet_from_blueprint(convnet_blueprint)
+        builder.build_fullnet_from_blueprint(fullnet_blueprint)
+
+        model = builder.build()
+        model.initialize()  # By default, uniform initialization.
+
+    with Timer("Building optimizer"):
+        loss = BinaryCrossEntropyEstimateWithAutoRegressiveMask(model, trainset)
+
+        optimizer = SGD(loss=loss)
+        optimizer.append_direction_modifier(ConstantLearningRate(0.001))
+
+    with Timer("Building trainer"):
+        batch_scheduler = MiniBatchSchedulerWithAutoregressiveMask(trainset, batch_size,
+                                                                   concatenate_mask=consider_mask_as_channel)
+
+        trainer = Trainer(optimizer, batch_scheduler)
+
+        # Print time for one epoch
+        trainer.append_task(tasks.PrintEpochDuration())
+        trainer.append_task(tasks.PrintTrainingDuration())
+
+        # Log training error
+        loss_monitor = views.MonitorVariable(loss.loss)
+        avg_loss = tasks.AveragePerEpoch(loss_monitor)
+        accum = tasks.Accumulator(loss_monitor)
+        logger = tasks.Logger(loss_monitor, avg_loss)
+        trainer.append_task(logger, avg_loss, accum)
+
+        # Print average training loss.
+        trainer.append_task(tasks.Print("Avg. training loss:     : {}", avg_loss))
+
+        trainer.append_task(stopping_criteria.MaxEpochStopping(max_epoch))
+
+        trainer.build_theano_graph()
+
+    with Timer("Training"):
+        trainer.train()
+
+    mask_o_lt_d = batch_scheduler._shared_batch_mask
+    fprop_output, fprop_pre_output = model.fprop(trainset.inputs, mask_o_lt_d, return_output_preactivation=True)
+    model_output = model.get_output(T.concatenate([trainset.inputs * mask_o_lt_d, mask_o_lt_d], axis=1))
+    assert_array_equal(model_output.eval(), fprop_pre_output.eval())
+    print(np.sum(abs(model_output.eval() - fprop_pre_output.eval())))
+
+
 if __name__ == '__main__':
     # test_simple_convnade()
     # test_convnade_with_mask_as_input_channel()
     # test_convnade_with_max_pooling()
     test_save_load_convnade()
-    # test_check_init()
+    test_check_init()
+    test_new_fprop_matches_old_fprop()
