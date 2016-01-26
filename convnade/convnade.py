@@ -206,10 +206,6 @@ class Layer(object):
         return {}
 
     @property
-    def params(self):
-        return {}
-
-    @property
     def parameters(self):
         return []
 
@@ -244,8 +240,8 @@ class Layer(object):
 
 
 class ConvolutionalLayer(Layer):
-    def __init__(self, nb_filters, filter_shape, border_mode, activation="sigmoid"):
-        super(ConvolutionalLayer, self).__init__(size=nb_filters)
+    def __init__(self, nb_filters, filter_shape, border_mode, activation="sigmoid", name=""):
+        super(ConvolutionalLayer, self).__init__(size=nb_filters, name=name)
         self.nb_filters = nb_filters
         self.filter_shape = filter_shape
         self.border_mode = border_mode
@@ -257,8 +253,8 @@ class ConvolutionalLayer(Layer):
         # Allocating memory for parameters
         nb_input_feature_maps = self.prev_layer.size
         W_shape = (self.nb_filters, nb_input_feature_maps) + self.filter_shape
-        self.W = theano.shared(value=np.zeros(W_shape, dtype=theano.config.floatX), name='W', borrow=True)
-        self.b = theano.shared(value=np.zeros(self.nb_filters, dtype=theano.config.floatX), name='b', borrow=True)
+        self.W = theano.shared(value=np.zeros(W_shape, dtype=theano.config.floatX), name=self.name+'W', borrow=True)
+        self.b = theano.shared(value=np.zeros(self.nb_filters, dtype=theano.config.floatX), name=self.name+'b', borrow=True)
         print(W_shape, self.border_mode)
 
     def initialize(self, weights_initializer=initer.UniformInitializer(random_seed=1234)):
@@ -270,11 +266,6 @@ class ConvolutionalLayer(Layer):
                 'filter_shape': self.filter_shape,
                 'border_mode': self.border_mode,
                 'activation': self.activation}
-
-    @property
-    def params(self):
-        return {'W': self.W,
-                'b': self.b}
 
     @property
     def parameters(self):
@@ -323,8 +314,8 @@ class ConvolutionalLayer(Layer):
 
 
 class FullyConnectedLayer(Layer):
-    def __init__(self, input_size, hidden_size, activation="sigmoid"):
-        super(FullyConnectedLayer, self).__init__(size=hidden_size)
+    def __init__(self, input_size, hidden_size, activation="sigmoid", name=""):
+        super(FullyConnectedLayer, self).__init__(size=hidden_size, name=name)
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.activation = activation
@@ -333,8 +324,8 @@ class FullyConnectedLayer(Layer):
     def allocate(self):
         # Allocating memory for parameters
         W_shape = (self.input_size, self.hidden_size)
-        self.W = theano.shared(value=np.zeros(W_shape, dtype=theano.config.floatX), name='W', borrow=True)
-        self.b = theano.shared(value=np.zeros(self.hidden_size, dtype=theano.config.floatX), name='b', borrow=True)
+        self.W = theano.shared(value=np.zeros(W_shape, dtype=theano.config.floatX), name=self.name+'W', borrow=True)
+        self.b = theano.shared(value=np.zeros(self.hidden_size, dtype=theano.config.floatX), name=self.name+'b', borrow=True)
         print(W_shape)
 
     def initialize(self, weights_initializer=initer.UniformInitializer(random_seed=1234)):
@@ -345,11 +336,6 @@ class FullyConnectedLayer(Layer):
         return {'input_size': self.input_size,
                 'hidden_size': self.hidden_size,
                 'activation': self.activation}
-
-    @property
-    def params(self):
-        return {'W': self.W,
-                'b': self.b}
 
     @property
     def parameters(self):
@@ -392,6 +378,11 @@ class DeepModel(Model):
         self.layers = layers
         self.name = name
 
+        # Rename shared variables.
+        for i, layer in enumerate(self.layers):
+            for param in layer.parameters:
+                param.name = self.name + "layer{0}_{1}".format(i, param.name)
+
     def get_output(self, X):
         output = X
         for layer in self.layers:
@@ -419,19 +410,12 @@ class DeepModel(Model):
         return hyperparams
 
     @property
-    def params(self):
-        params = OrderedDict()
-        for i, layer in enumerate(self.layers):
-            for k, v in layer.params.items():
-                # TODO: Changing the variable name till first smartpy's PR is merged.
-                v.name = self.name + "layer{0}_{1}".format(i, k)
-                params[v.name] = v
-
-        return params
-
-    @property
     def parameters(self):
-        return list(self.params.values())
+        parameters = []
+        for layer in self.layers:
+            parameters += layer.parameters
+
+        return parameters
 
     def initialize(self, weights_initializer=initer.UniformInitializer(random_seed=1234)):
         for layer in self.layers:
@@ -509,14 +493,6 @@ class DeepConvNADE(Model):
         hyperparams['ordering_seed'] = self.ordering_seed
         hyperparams['consider_mask_as_channel'] = self.consider_mask_as_channel
         return hyperparams
-
-    @property
-    def params(self):
-        #params = super(DeepConvNADE, self).params
-        params = OrderedDict()
-        params.update(self.convnet.params)
-        params.update(self.fullnet.params)
-        return params
 
     @property
     def parameters(self):

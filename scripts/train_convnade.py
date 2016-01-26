@@ -221,6 +221,8 @@ def main():
         # Check if provided hyperparams match those in the experiment folder
         hyperparams_loaded = utils.load_dict_from_json_file(pjoin(experiment_path, "hyperparams.json"))
         if hyperparams != hyperparams_loaded:
+            print("{\n" + "\n".join(["{}: {}".format(k, hyperparams[k]) for k in sorted(hyperparams.keys())]) + "\n}")
+            print("{\n" + "\n".join(["{}: {}".format(k, hyperparams_loaded[k]) for k in sorted(hyperparams_loaded.keys())]) + "\n}")
             print("The arguments provided are different than the one saved. Use --force if you are certain.\nQuitting.")
             exit(1)
     else:
@@ -304,6 +306,10 @@ def main():
         trainer.append_task(stopping_criteria.EarlyStopping(nll.mean, lookahead=args.lookahead, eps=args.lookahead_eps, callback=save_model))
 
         trainer.build_theano_graph()
+
+    if resuming:
+        with Timer("Loading"):
+            trainer.load(experiment_path)
 
     with Timer("Training"):
         trainer.train()
