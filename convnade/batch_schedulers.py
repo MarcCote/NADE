@@ -35,7 +35,7 @@ class MiniBatchSchedulerWithAutoregressiveMask(MiniBatchScheduler):
 
         # Allocate memory for the autoregressive mask.
         self.mask_shape = (len(dataset),) + self.dataset.input_shape
-        self._shared_batch_mask = sharedX(np.zeros(self.mask_shape), name='autoregressive_mask')
+        self._shared_batch_mask = sharedX(np.zeros(self.mask_shape), name='autoregressive_mask', keep_on_cpu=True)
 
         # Add a new attribute: a symbolic variable representing the auto regressive mask.
         self._shared_batch_mask.set_value(self.generate_autoregressive_mask())
@@ -91,6 +91,7 @@ class MiniBatchSchedulerWithAutoregressiveMask(MiniBatchScheduler):
     def save(self, savedir):
         state = {"version": 1,
                  "seed": self.seed,
+                 "concatenate_mask": self.concatenate_mask,
                  "batch_size": self.batch_size,
                  "shared_batch_count": self.shared_batch_count.get_value(),
                  "rng": pickle.dumps(self.rng),

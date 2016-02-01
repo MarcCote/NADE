@@ -230,20 +230,28 @@ class Layer(object):
     def infer_shape(self, input_shape):
         return input_shape
 
-    def save(self, path):
-        """ Saves model information to disk. """
+    def save(self, savedir):
+        hyperparameters = {'version': 1,
+                           'size': self.size,
+                           'name': self.name}
+        smartutils.save_dict_to_json_file(pjoin(savedir, "meta.json"), {"name": self.__class__.__name__})
+        smartutils.save_dict_to_json_file(pjoin(savedir, "hyperparams.json"), hyperparameters)
+
+    def load(self, loaddir):
         pass
 
-    def load(self, path):
-        """ Loads model information from disk. """
-        pass
+    @classmethod
+    def create(cls, loaddir):
+        hyperparameters = smartutils.load_dict_from_json_file(pjoin(loaddir, "hyperparams.json"))
+        return cls(size=hyperparameters["size"],
+                   name=hyperparameters["name"])
 
 
 class ConvolutionalLayer(Layer):
     def __init__(self, nb_filters, filter_shape, border_mode, activation="sigmoid", name=""):
         super(ConvolutionalLayer, self).__init__(size=nb_filters, name=name)
         self.nb_filters = nb_filters
-        self.filter_shape = filter_shape
+        self.filter_shape = tuple(filter_shape)
         self.border_mode = border_mode
         self.activation = activation
 
@@ -296,10 +304,12 @@ class ConvolutionalLayer(Layer):
         return output_shape
 
     def save(self, savedir):
-        hyperparameters = {'nb_filters': self.nb_filters,
+        hyperparameters = {'version': 1,
+                           'nb_filters': self.nb_filters,
                            'filter_shape': self.filter_shape,
                            'border_mode': self.border_mode,
-                           'activation': self.activation}
+                           'activation': self.activation,
+                           'name': self.name}
         smartutils.save_dict_to_json_file(pjoin(savedir, "meta.json"), {"name": self.__class__.__name__})
         smartutils.save_dict_to_json_file(pjoin(savedir, "hyperparams.json"), hyperparameters)
 
@@ -311,6 +321,14 @@ class ConvolutionalLayer(Layer):
         parameters = np.load(pjoin(loaddir, "params.npz"))
         self.W.set_value(parameters['W'])
         self.b.set_value(parameters['b'])
+
+    @classmethod
+    def create(cls, loaddir):
+        hyperparameters = smartutils.load_dict_from_json_file(pjoin(loaddir, "hyperparams.json"))
+        return cls(nb_filters=hyperparameters["nb_filters"],
+                   filter_shape=hyperparameters["filter_shape"],
+                   border_mode=hyperparameters["border_mode"],
+                   activation=hyperparameters["activation"])
 
 
 class FullyConnectedLayer(Layer):
@@ -357,9 +375,11 @@ class FullyConnectedLayer(Layer):
         return (input_shape[0], self.hidden_size)
 
     def save(self, savedir):
-        hyperparameters = {'input_size': self.input_size,
+        hyperparameters = {'version': 1,
+                           'input_size': self.input_size,
                            'hidden_size': self.hidden_size,
-                           'activation': self.activation}
+                           'activation': self.activation,
+                           'name': self.name}
         smartutils.save_dict_to_json_file(pjoin(savedir, "meta.json"), {"name": self.__class__.__name__})
         smartutils.save_dict_to_json_file(pjoin(savedir, "hyperparams.json"), hyperparameters)
 
@@ -371,6 +391,13 @@ class FullyConnectedLayer(Layer):
         parameters = np.load(pjoin(loaddir, "params.npz"))
         self.W.set_value(parameters['W'])
         self.b.set_value(parameters['b'])
+
+    @classmethod
+    def create(cls, loaddir):
+        hyperparameters = smartutils.load_dict_from_json_file(pjoin(loaddir, "hyperparams.json"))
+        return cls(input_size=hyperparameters["input_size"],
+                   hidden_size=hyperparameters["hidden_size"],
+                   activation=hyperparameters["activation"])
 
 
 class DeepModel(Model):
@@ -447,6 +474,41 @@ class DeepModel(Model):
             loaddir_layer = pjoin(loaddir, 'layer_{}'.format(i))
             layer.load(loaddir_layer)
 
+    @classmethod
+    def create(cls, loaddir):
+        hyperparameters = smartutils.load_dict_from_json_file(pjoin(loaddir, "hyperparams.json"))
+
+        import os
+        layers = []
+        for i in range(hyperparameters['nb_layers']):
+            loaddir_layer = pjoin(loaddir, 'layer_{}'.format(i))
+
+            if not os.path.isfile(pjoin(loaddir_layer, "meta.json")):
+                # TODO save `Layer` object too.
+                # Assume it's the input layer with 2 channels
+                nb_channels = 2
+                layer = Layer(size=nb_channels, name=hyperparameters['name'] + "input")
+            else:
+                meta = smartutils.load_dict_from_json_file(pjoin(loaddir_layer, "meta.json"))
+                if meta["name"] == "ConvolutionalLayer":
+                    layer = ConvolutionalLayer.create(loaddir_layer)
+                elif meta["name"] == "FullyConnectedLayer":
+                    layer = FullyConnectedLayer.create(loaddir_layer)
+                else:
+                    raise NameError("Unknown layer: {}".format(meta["name"]))
+
+            # Connect layers, if needed
+            if i > 0:
+                layers[-1].next_layer = layer
+                layer.prev_layer = layers[-1]
+
+            layers.append(layer)
+
+        for layer in layers:
+            layer.allocate()
+
+        return cls(layers=layers, name=hyperparameters['name'])
+
 
 class DeepConvNADE(Model):
     def __init__(self,
@@ -456,31 +518,31 @@ class DeepConvNADE(Model):
                  fullnet_layers,
                  ordering_seed=1234,
                  consider_mask_as_channel=False):
-        #super(DeepConvNADE, self).__init__()
+
         self.has_convnet = len(convnet_layers) > 0
         self.has_fullnet = len(fullnet_layers) > 0
 
         self.convnet = DeepModel(convnet_layers, name="convnet_")
         self.fullnet = DeepModel(fullnet_layers, name="fullnet_")
 
-        self.image_shape = image_shape
+        self.image_shape = tuple(image_shape)
         self.nb_channels = nb_channels
         self.ordering_seed = ordering_seed
         self.consider_mask_as_channel = consider_mask_as_channel
 
         if self.has_convnet:
-            # Make sure the convolutional network outputs 'np.prod(image_shape)' units.
-            input_shape = (1, nb_channels) + image_shape
+            # Make sure the convolutional network outputs 'np.prod(self.image_shape)' units.
+            input_shape = (1, nb_channels) + self.image_shape
             out_shape = self.convnet.infer_shape(input_shape)
-            if out_shape != (1, 1) + image_shape:
-                raise ValueError("(Convnet) Output shape mismatched: {} != {}".format(out_shape, (1, 1) + image_shape))
+            if out_shape != (1, 1) + self.image_shape:
+                raise ValueError("(Convnet) Output shape mismatched: {} != {}".format(out_shape, (1, 1) + self.image_shape))
 
         if self.fullnet:
-            # Make sure the fully connected network outputs 'np.prod(image_shape)' units.
-            input_shape = (1, int(np.prod(image_shape)))
+            # Make sure the fully connected network outputs 'np.prod(self.image_shape)' units.
+            input_shape = (1, int(np.prod(self.image_shape)))
             out_shape = self.fullnet.infer_shape(input_shape)
-            if out_shape != (1, int(np.prod(image_shape))):
-                raise ValueError("(Fullnet) Output shape mismatched: {} != {}".format(out_shape, (1, int(np.prod(image_shape)))))
+            if out_shape != (1, int(np.prod(self.image_shape))):
+                raise ValueError("(Fullnet) Output shape mismatched: {} != {}".format(out_shape, (1, int(np.prod(self.image_shape)))))
 
     @property
     def hyperparams(self):
@@ -524,7 +586,7 @@ class DeepConvNADE(Model):
         return output
 
     def save(self, path):
-        savedir = smartutils.create_folder(pjoin(path, "model"))
+        savedir = smartutils.create_folder(pjoin(path, type(self).__name__))
 
         hyperparameters = {'version': 1,
                            'image_shape': self.image_shape,
@@ -545,15 +607,33 @@ class DeepConvNADE(Model):
         # self.fullnet.save(savedir)
 
     def load(self, path):
-        loaddir = pjoin(path, "model")
+        loaddir = pjoin(path, type(self).__name__)
         # self.convnet.load(loaddir)
         # self.fullnet.load(loaddir)
         self.convnet.load(pjoin(loaddir, 'convnet'))
         self.fullnet.load(pjoin(loaddir, 'fullnet'))
 
-    # @classmethod
-    # def create(cls, path):
-    #     raise NotImplementedError()
+    @classmethod
+    def create(cls, path):
+        loaddir = pjoin(path, cls.__name__)
+        hyperparameters = smartutils.load_dict_from_json_file(pjoin(loaddir, "hyperparams.json"))
+
+        # Build convnet
+        convnet = DeepModel([], name="convnet_")
+        if hyperparameters['has_convnet']:
+            convnet = DeepModel.create(pjoin(loaddir, 'convnet'))
+
+        # Build fullnet
+        fullnet = DeepModel([], name="fullnet_")
+        if hyperparameters['has_fullnet']:
+            fullnet = DeepModel.create(pjoin(loaddir, 'fullnet'))
+
+        return cls(image_shape=hyperparameters["image_shape"],
+                   nb_channels=hyperparameters["nb_channels"],
+                   convnet_layers=convnet.layers,
+                   fullnet_layers=fullnet.layers,
+                   ordering_seed=hyperparameters["ordering_seed"],
+                   consider_mask_as_channel=hyperparameters["consider_mask_as_channel"])
 
     def fprop(self, input, mask_o_lt_d, return_output_preactivation=False):
         """ Returns the theano graph that computes the fprop given an `input` and an `ordering`.

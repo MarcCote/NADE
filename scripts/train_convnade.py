@@ -311,6 +311,9 @@ def main():
         with Timer("Loading"):
             trainer.load(experiment_path)
 
+    from ipdb import set_trace as dbg
+    dbg()
+
     with Timer("Training"):
         trainer.train()
 
