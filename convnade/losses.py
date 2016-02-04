@@ -5,34 +5,58 @@ from smartlearner import Loss
 from smartlearner.views import ItemGetter
 
 
+#class NllEstimateUsingBinaryCrossEntropyWithAutoRegressiveMask(Loss):
 class BinaryCrossEntropyEstimateWithAutoRegressiveMask(Loss):
     """ NLL estimate for a Deep NADE model where an auto regressive mask has been applied to the inputs.
 
     Notes
     -----
-    This loss function assume the dataset has an attribute named `symb_mask` which is a symbolic variable representing
+    This loss function assume the dataset has an attribute named `mask_o_lt_d` which is a symbolic variable representing
     the $d-1$ first dimensions in the ordering that are allowed to be used i.e. $x_i : i \in o_{<d}$.
     """
     def _get_updates(self):
         return {}  # There is no special updates for this loss.
 
     def _compute_losses(self, model_output):
-        # Mask allowing only the $d-1$ first dimensions in the ordering i.e. $x_i : i \in o_{<d}$.
-        # It is 2D matrix, each images in the batch will have a different mask meaning that mask_o_lt_d.shape[0] == input.shape[0].
-        mask_o_lt_d = self.dataset.symb_mask
-
         # We assume model_ouput is the preactivation.
         output = T.nnet.sigmoid(model_output)
         cross_entropies = T.nnet.binary_crossentropy(output, self.dataset.symb_targets)
-        cross_entropies_masked = cross_entropies * (1-mask_o_lt_d)
+        cross_entropies_masked = cross_entropies * (1-self.dataset.mask_o_lt_d)
         nll_estimate = T.sum(cross_entropies_masked, axis=1)
 
         # We unbias the NLL estimate as mentioned in Uria et al.
         D = np.float32(np.prod(self.model.image_shape))  # Scaling factor
-        d = T.sum(mask_o_lt_d, axis=1)
+        d = T.sum(self.dataset.mask_o_lt_d, axis=1)
         weighted_nll_estimate = nll_estimate * (D / (D-d+1))
 
         return weighted_nll_estimate
+
+
+class NllUsingBinaryCrossEntropyWithAutoRegressiveMask(Loss):
+    """ NLL for a Deep NADE model where an auto regressive mask has been applied to the inputs.
+
+    Notes
+    -----
+    This loss function assume the dataset has an attribute named `mask_o_d` which is a symbolic variable representing
+    the $d-1$ first dimensions in the ordering that are allowed to be used i.e. $x_i : i \in o_{<d}$.
+    """
+    def __init__(self, model, dataset, mod):
+        super().__init__(model, dataset)
+        self.mod = mod
+
+    def _get_updates(self):
+        return {}  # There is no special updates for this loss.
+
+    def _compute_losses(self, model_output):
+        # We assume model_ouput is the preactivation.
+        output = T.nnet.sigmoid(model_output)
+        cross_entropies = T.nnet.binary_crossentropy(output, self.dataset.symb_targets)
+
+        # Keep only the d-th conditional
+        cross_entropies_masked = cross_entropies * self.mod
+        ln_p_xod_given_xoltd = -T.sum(cross_entropies_masked, axis=1)
+        nll_xod_given_xoltd = -ln_p_xod_given_xoltd
+        return nll_xod_given_xoltd
 
 
 # class EvaluateDeepNadeNLLEstimateOnTrivial(Loss):
@@ -84,52 +108,52 @@ class BinaryCrossEntropyEstimateWithAutoRegressiveMask(Loss):
 #         return ItemGetter(self, attribute=1)
 
 
-class EvaluateDeepNadeNLLEstimate(Loss):
-    """ This tasks compute the NLL estimate for a Deep NADE model.  """
-    def __init__(self, conv_nade, dataset, ordering_mask, batch_size=None, ordering_seed=1234):
+# class EvaluateDeepNadeNLLEstimate(Loss):
+#     """ This tasks compute the NLL estimate for a Deep NADE model.  """
+#     def __init__(self, conv_nade, dataset, ordering_mask, batch_size=None, ordering_seed=1234):
 
-        dataset_shared = dataset
-        if isinstance(dataset, np.ndarray):
-            dataset_shared = theano.shared(dataset, name='dataset', borrow=True)
+#         dataset_shared = dataset
+#         if isinstance(dataset, np.ndarray):
+#             dataset_shared = theano.shared(dataset, name='dataset', borrow=True)
 
-        if batch_size is None:
-            batch_size = len(dataset_shared.get_value())
+#         if batch_size is None:
+#             batch_size = len(dataset_shared.get_value())
 
-        nb_batches = int(np.ceil(len(dataset_shared.get_value()) / batch_size))
+#         nb_batches = int(np.ceil(len(dataset_shared.get_value()) / batch_size))
 
-        # Pre-generate the orderings that will be used to estimate the NLL of the Deep NADE model.
-        rng = np.random.RandomState(ordering_seed)
-        D = dataset_shared.get_value().shape[1]
-        d = rng.randint(D, size=(len(dataset_shared.get_value()), 1))
-        masks_o_lt_d = np.arange(D) < d
-        map(rng.shuffle, masks_o_lt_d)  # Inplace shuffling along axis=1.
+#         # Pre-generate the orderings that will be used to estimate the NLL of the Deep NADE model.
+#         rng = np.random.RandomState(ordering_seed)
+#         D = dataset_shared.get_value().shape[1]
+#         d = rng.randint(D, size=(len(dataset_shared.get_value()), 1))
+#         masks_o_lt_d = np.arange(D) < d
+#         map(rng.shuffle, masks_o_lt_d)  # Inplace shuffling along axis=1.
 
-        # $X$: batch of inputs (flatten images)
-        input = T.matrix('input')
-        loss = conv_nade.mean_nll_estimate_loss(input, ordering_mask)
-        no_batch = T.iscalar('no_batch')
-        givens = {input: dataset[no_batch * batch_size:(no_batch + 1) * batch_size]}
-        compute_loss = theano.function([no_batch], loss, givens=givens, name="NLL Estimate")
-        #theano.printing.pydotprint(compute_loss, '{0}_compute_nll_{1}'.format(conv_nade.__class__.__name__, theano.config.device), with_ids=True)
+#         # $X$: batch of inputs (flatten images)
+#         input = T.matrix('input')
+#         loss = conv_nade.mean_nll_estimate_loss(input, ordering_mask)
+#         no_batch = T.iscalar('no_batch')
+#         givens = {input: dataset[no_batch * batch_size:(no_batch + 1) * batch_size]}
+#         compute_loss = theano.function([no_batch], loss, givens=givens, name="NLL Estimate")
+#         #theano.printing.pydotprint(compute_loss, '{0}_compute_nll_{1}'.format(conv_nade.__class__.__name__, theano.config.device), with_ids=True)
 
-        def _nll_mean_and_std():
-            nlls = np.zeros(len(dataset_shared.get_value()))
-            for i in range(nb_batches):
-                # Hack: Change ordering mask in the model before computing the NLL estimate.
-                ordering_mask.set_value(masks_o_lt_d[i*batch_size:(i+1)*batch_size])
-                nlls[i*batch_size:(i+1)*batch_size] = compute_loss(i)
+#         def _nll_mean_and_std():
+#             nlls = np.zeros(len(dataset_shared.get_value()))
+#             for i in range(nb_batches):
+#                 # Hack: Change ordering mask in the model before computing the NLL estimate.
+#                 ordering_mask.set_value(masks_o_lt_d[i*batch_size:(i+1)*batch_size])
+#                 nlls[i*batch_size:(i+1)*batch_size] = compute_loss(i)
 
-            return round(nlls.mean(), 6), round(nlls.std() / np.sqrt(nlls.shape[0]), 6)
+#             return round(nlls.mean(), 6), round(nlls.std() / np.sqrt(nlls.shape[0]), 6)
 
-        super(EvaluateDeepNadeNLLEstimate, self).__init__(_nll_mean_and_std)
+#         super(EvaluateDeepNadeNLLEstimate, self).__init__(_nll_mean_and_std)
 
-    @property
-    def mean(self):
-        return ItemGetter(self, attribute=0)
+#     @property
+#     def mean(self):
+#         return ItemGetter(self, attribute=0)
 
-    @property
-    def std(self):
-        return ItemGetter(self, attribute=1)
+#     @property
+#     def std(self):
+#         return ItemGetter(self, attribute=1)
 
 
 # class EvaluateDeepNadeNLLParallel(Evaluate):
