@@ -66,6 +66,11 @@ def estimate_NLL(model, dataset, seed=1234):
             #print("\n".join([l for l in str(e).split("\n") if "allocating" in l]))
             pass
 
+        except RuntimeError as e:
+            # Probably RuntimeError: BaseGpuCorrMM: Failed to allocate output of
+            if "allocate" not in str(e):
+                raise e
+
         print("*An error occured while estimating NLL. Will try a smaller batch size.")
         batch_size = batch_size // 2
 
