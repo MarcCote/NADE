@@ -134,9 +134,7 @@ def main():
         # Load the actual model.
         model = model_class.create(pjoin(experiment_path, "model"))  # Create new instance
         model.load(pjoin(experiment_path, "model"))  # Restore state.
-
-        print(str(model.convnet))
-        print(str(model.fullnet))
+        print(str(model))
 
     # Result files.
     evaluation_dir = smartutils.create_folder(pjoin(experiment_path, "evaluation"))

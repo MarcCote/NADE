@@ -137,7 +137,7 @@ def build_train_convnade_argparser(subparser):
     model.add_argument('--fullnet-blueprint', type=str, help='blueprint of the fully connected layers e.g. "500->784".')
     model.add_argument('--blueprints-seed', type=int, help='seed used to generate random blueprints.')
     model.add_argument('--ordering-seed', type=int, help='seed used to generate new ordering. Default=1234', default=1234)
-    model.add_argument('--concatenate-mask', action='store_true',
+    model.add_argument('--use-mask-as-input', action='store_true',
                        help='if specified, concatenate the ordering mask $o_{<d}$ to the input. In the convolutional part this translates to adding a new channel.')
     #model.add_argument('--finetune_on_trivial_orderings', action='store_true', help='finetune model using the 8 trivial orderings.')
 
@@ -174,7 +174,8 @@ def buildArgsParser():
     optimizer = p.add_argument_group("Optimizer (required)")
     optimizer = optimizer.add_mutually_exclusive_group(required=True)
     optimizer.add_argument('--SGD', metavar="LR", type=str, help='use SGD with constant learning rate for training.')
-    optimizer.add_argument('--ADAGRAD', metavar="LR [EPS=1e-6]", type=str, help='use ADAGRAD for training.')
+    optimizer.add_argument('--AdaGrad', metavar="LR [EPS=1e-6]", type=str, help='use AdaGrad for training.')
+    optimizer.add_argument('--Adam', metavar="", type=str, help='use Adam for training.')
 
     # General options (optional)
     general = p.add_argument_group("General arguments")
@@ -236,16 +237,17 @@ def main():
         trainset, validset, testset = datasets.load(args.dataset)
 
         image_shape = (28, 28)
-        nb_channels = 1 + (args.concatenate_mask is True)
+        nb_channels = 1 + (args.use_mask_as_input is True)
 
         batch_scheduler = MiniBatchSchedulerWithAutoregressiveMask(trainset, args.batch_size,
-                                                                   concatenate_mask=args.concatenate_mask,
+                                                                   use_mask_as_input=args.use_mask_as_input,
                                                                    seed=args.ordering_seed)
 
     with Timer("Building model"):
         builder = DeepConvNADEBuilder(image_shape=image_shape,
                                       nb_channels=nb_channels,
-                                      hidden_activation=args.hidden_activation)
+                                      hidden_activation=args.hidden_activation,
+                                      use_mask_as_input=args.use_mask_as_input)
 
         if args.blueprints_seed is not None:
             convnet_blueprint, fullnet_blueprint = generate_blueprints(args.blueprint_seed, image_shape[0])
@@ -292,7 +294,7 @@ def main():
         # Print NLL mean/stderror.
         nll = views.LossView(loss=BinaryCrossEntropyEstimateWithAutoRegressiveMask(model, validset),
                              batch_scheduler=MiniBatchSchedulerWithAutoregressiveMask(validset, batch_size=0.1*len(validset),
-                                                                                      concatenate_mask=args.concatenate_mask,
+                                                                                      use_mask_as_input=args.use_mask_as_input,
                                                                                       keep_mask=True,
                                                                                       seed=args.ordering_seed+1))
         trainer.append_task(tasks.Print("Validset - NLL          : {0:.2f} ± {1:.2f}", nll.mean, nll.stderror))
@@ -311,14 +313,11 @@ def main():
         with Timer("Loading"):
             trainer.load(experiment_path)
 
-    from ipdb import set_trace as dbg
-    dbg()
-
     with Timer("Training"):
         trainer.train()
 
     trainer.save(experiment_path)
-    model.save(smartutils.create_folder(pjoin(experiment_path, "model")))
+    model.save(experiment_path)
 
 
     #     # Add a task that changes the ordering mask
@@ -392,7 +391,7 @@ def main():
     #     log_entry = OrderedDict()
     #     log_entry["Convnet Blueprint"] = args.convnet_blueprint
     #     log_entry["Fullnet Blueprint"] = args.fullnet_blueprint
-    #     log_entry["Mask as channel"] = model.hyperparams["consider_mask_as_channel"]
+    #     log_entry["Mask as channel"] = model.hyperparams["use_mask_as_input"]
     #     log_entry["Activation Function"] = args.hidden_activation
     #     log_entry["Initialization Seed"] = args.initialization_seed
     #     log_entry["Best Epoch"] = trainer.status.extra["best_epoch"] if args.lookahead else trainer.status.current_epoch

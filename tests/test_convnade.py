@@ -44,7 +44,7 @@ def test_simple_convnade():
     nb_kernels = 8
     kernel_shape = (2, 2)
     hidden_activation = "sigmoid"
-    consider_mask_as_channel = True
+    use_mask_as_input = True
     batch_size = 1024
     ordering_seed = 1234
     max_epoch = 3
@@ -68,7 +68,7 @@ def test_simple_convnade():
     with Timer("Building model"):
         builder = DeepConvNADEBuilder(image_shape=image_shape,
                                       nb_channels=nb_channels,
-                                      consider_mask_as_channel=True)
+                                      use_mask_as_input=use_mask_as_input)
 
         convnet_blueprint = "64@2x2(valid) -> 1@2x2(full)"
         fullnet_blueprint = "5 -> 16"
@@ -152,7 +152,7 @@ def test_convnade_with_max_pooling():
     nb_kernels = 8
     kernel_shape = (2, 2)
     hidden_activation = "sigmoid"
-    consider_mask_as_channel = True
+    use_mask_as_input = True
     batch_size = 1024
     ordering_seed = 1234
     max_epoch = 3
@@ -176,7 +176,7 @@ def test_convnade_with_max_pooling():
     with Timer("Building model"):
         builder = DeepConvNADEBuilder(image_shape=image_shape,
                                       nb_channels=nb_channels,
-                                      consider_mask_as_channel=True)
+                                      use_mask_as_input=use_mask_as_input)
 
         convnet_blueprint = "64@3x3(valid) -> max@2x2 -> up@2x2 -> 1@3x3(full)"
         fullnet_blueprint = "5 -> 16"
@@ -260,7 +260,7 @@ def test_convnade_with_mask_as_input_channel():
     nb_kernels = 8
     kernel_shape = (2, 2)
     hidden_activation = "sigmoid"
-    concatenate_mask = True
+    use_mask_as_input = True
     batch_size = 1024
     ordering_seed = 1234
     max_epoch = 3
@@ -281,8 +281,8 @@ def test_convnade_with_mask_as_input_channel():
         image_shape = (4, 4)
 
         # We consider the mask as an input channel so we do the necessary modification to the datasets.
-        nb_channels = 1 + (concatenate_mask is True)
-        batch_scheduler = MiniBatchSchedulerWithAutoregressiveMask(trainset, batch_size, concatenate_mask=concatenate_mask)
+        nb_channels = 1 + (use_mask_as_input is True)
+        batch_scheduler = MiniBatchSchedulerWithAutoregressiveMask(trainset, batch_size, use_mask_as_input=use_mask_as_input)
 
     with Timer("Building model"):
         builder = DeepConvNADEBuilder(image_shape=image_shape, nb_channels=nb_channels)
@@ -324,7 +324,7 @@ def test_convnade_with_mask_as_input_channel():
 
         # Print NLL mean/stderror.
         nll = views.LossView(loss=BinaryCrossEntropyEstimateWithAutoRegressiveMask(model, validset),
-                             batch_scheduler=MiniBatchSchedulerWithAutoregressiveMask(validset, batch_size=len(validset), concatenate_mask=concatenate_mask))
+                             batch_scheduler=MiniBatchSchedulerWithAutoregressiveMask(validset, batch_size=len(validset), use_mask_as_input=use_mask_as_input))
         trainer.append_task(tasks.Print("Validset - NLL          : {0:.2f} ± {1:.2f}", nll.mean, nll.stderror))
 
         trainer.build_theano_graph()
@@ -371,7 +371,7 @@ def test_check_init():
     nb_kernels = 8
     kernel_shape = (2, 2)
     hidden_activation = "hinge"
-    consider_mask_as_channel = True
+    use_mask_as_input = True
     batch_size = 1024
     ordering_seed = 1234
     max_epoch = 5
@@ -397,7 +397,7 @@ def test_check_init():
         with Timer("Building model"):
             builder = DeepConvNADEBuilder(image_shape=image_shape,
                                           nb_channels=nb_channels,
-                                          consider_mask_as_channel=True)
+                                          use_mask_as_input=use_mask_as_input)
 
             convnet_blueprint = "64@2x2(valid) -> 1@2x2(full)"
             fullnet_blueprint = "5 -> 16"
@@ -476,7 +476,7 @@ def test_save_load_convnade():
     nb_kernels = 8
     kernel_shape = (2, 2)
     hidden_activation = "hinge"
-    consider_mask_as_channel = True
+    use_mask_as_input = True
     batch_size = 1024
     ordering_seed = 1234
     max_epoch = 5
@@ -502,7 +502,7 @@ def test_save_load_convnade():
         with Timer("Building model"):
             builder = DeepConvNADEBuilder(image_shape=image_shape,
                                           nb_channels=nb_channels,
-                                          consider_mask_as_channel=True)
+                                          use_mask_as_input=use_mask_as_input)
 
             convnet_blueprint = "64@2x2(valid) -> 1@2x2(full)"
             fullnet_blueprint = "5 -> 16"
@@ -609,7 +609,7 @@ def test_new_fprop_matches_old_fprop():
     nb_kernels = 8
     kernel_shape = (2, 2)
     hidden_activation = "sigmoid"
-    consider_mask_as_channel = True
+    use_mask_as_input = True
     batch_size = 1024
     ordering_seed = 1234
     max_epoch = 10
@@ -628,12 +628,12 @@ def test_new_fprop_matches_old_fprop():
         testset = Dataset(testset.inputs.get_value()[:, indices_to_keep], testset.inputs.get_value()[:, indices_to_keep], name="testset")
 
         image_shape = (4, 4)
-        nb_channels = 1 + (consider_mask_as_channel is True)
+        nb_channels = 1 + (use_mask_as_input is True)
 
     with Timer("Building model"):
         builder = DeepConvNADEBuilder(image_shape=image_shape,
                                       nb_channels=nb_channels,
-                                      consider_mask_as_channel=consider_mask_as_channel)
+                                      use_mask_as_input=use_mask_as_input)
 
         convnet_blueprint = "64@2x2(valid) -> 1@2x2(full)"
         fullnet_blueprint = "5 -> 16"
@@ -653,7 +653,7 @@ def test_new_fprop_matches_old_fprop():
 
     with Timer("Building trainer"):
         batch_scheduler = MiniBatchSchedulerWithAutoregressiveMask(trainset, batch_size,
-                                                                   concatenate_mask=consider_mask_as_channel)
+                                                                   use_mask_as_input=use_mask_as_input)
 
         trainer = Trainer(optimizer, batch_scheduler)
 

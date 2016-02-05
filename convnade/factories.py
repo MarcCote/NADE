@@ -47,12 +47,16 @@ def optimizer_factory(hyperparams, loss):
         optimizer.append_direction_modifier(ConstantLearningRate(lr=float(options[0])))
         return optimizer
 
-    elif hyperparams["ADAGRAD"] is not None:
+    elif hyperparams["AdaGrad"] is not None:
         from smartlearner.optimizers import AdaGrad
-        options = hyperparams["ADAGRAD"].split()
+        options = hyperparams["AdaGrad"].split()
         lr = float(options[0])
         eps = float(options[1]) if len(options) > 1 else 1e-6
         return AdaGrad(loss=loss, lr=lr, eps=eps)
+
+    elif hyperparams["Adam"] is not None:
+        from smartlearner.optimizers import Adam
+        return Adam(loss=loss)
 
     else:
         raise ValueError("The optimizer is mandatory!")

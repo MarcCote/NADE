@@ -77,14 +77,14 @@ def merge_NLL_evaluations(evaluation_dir):
 
         if len(batch_nlls) == 0:
             print("Incomplete dataset evaluations: {}".format(subset))
-            results[subset] = {'nll_mean': float(-1),
-                               'nll_stderror': float(-1),
+            results[subset] = {'mean': float(-1),
+                               'stderror': float(-1),
                                'incomplete': incomplete}
             continue
 
         nlls = np.concatenate(nlls)
-        results[subset] = {'nll_mean': float(nlls.mean()),
-                           'nll_stderror': float(nlls.std(ddof=1) / np.sqrt(len(nlls))),
+        results[subset] = {'mean': float(nlls.mean()),
+                           'stderror': float(nlls.std(ddof=1) / np.sqrt(len(nlls))),
                            'incomplete': incomplete}
 
     return results
@@ -114,22 +114,18 @@ def main():
     if not os.path.isfile(results_file) or args.force:
         with Timer("Merging NLL evaluations"):
             results = merge_NLL_evaluations(evaluation_dir=pjoin(experiment_path, "evaluation"))
-            smartutils.save_dict_to_json_file(results_file, results)
+            smartutils.save_dict_to_json_file(results_file, {"NLL": results})
 
     else:
         print("Loading saved losses... (use --force to re-run evaluation)")
-        results = smartutils.load_dict_from_json_file(results_file)
+        results = smartutils.load_dict_from_json_file(results_file)["NLL"]
 
     nb_orderings = results['nb_orderings']
-    # print("NLL on trainset ({} orderings): {:.2f} ± {:.2f}".format(nb_orderings, results['trainset']['nll_mean'], results['trainset']['nll_stderror']))
-    print("NLL on validset ({} orderings): {:.2f} ± {:.2f}".format(nb_orderings, results['validset']['nll_mean'], results['validset']['nll_stderror']))
-    print("NLL on testset ({} orderings): {:.2f} ± {:.2f}".format(nb_orderings, results['testset']['nll_mean'], results['testset']['nll_stderror']))
+    for dataset in ['trainset', 'validset', 'testset']:
+        print("NLL estimate on {} ({} orderings): {:.2f} ± {:.2f}".format(dataset, nb_orderings, results[dataset]['mean'], results[dataset]['stderror']))
 
-    if results['validset']['incomplete']:
-        print("*Warning: validset evaluation is incomplete. Missing some orderings or batches.")
-
-    if results['testset']['incomplete']:
-        print("*Warning: testset evaluation is incomplete. Missing some orderings or batches.")
+        if results[dataset]['incomplete']:
+            print("** Warning **: {} evaluation is incomplete. Missing some orderings or batches.".format(dataset))
 
 if __name__ == '__main__':
     main()

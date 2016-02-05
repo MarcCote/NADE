@@ -13,7 +13,7 @@ floatX = theano.config.floatX
 class MiniBatchSchedulerWithAutoregressiveMask(MiniBatchScheduler):
     """ Batch of padded examples.
     """
-    def __init__(self, dataset, batch_size, concatenate_mask=False, keep_mask=False, seed=1234):
+    def __init__(self, dataset, batch_size, use_mask_as_input=False, keep_mask=False, seed=1234):
         """
         Parameters
         ----------
@@ -28,7 +28,7 @@ class MiniBatchSchedulerWithAutoregressiveMask(MiniBatchScheduler):
         """
         super().__init__(dataset, batch_size)
 
-        self.concatenate_mask = concatenate_mask
+        self.use_mask_as_input = use_mask_as_input
         self.seed = seed
         self.rng = np.random.RandomState(self.seed)
         self.keep_mask = keep_mask
@@ -44,7 +44,7 @@ class MiniBatchSchedulerWithAutoregressiveMask(MiniBatchScheduler):
         # Keep only `batch_size` masks as test values.
         self.dataset.mask_o_lt_d.tag.test_value = self._shared_mask_o_lt_d.get_value()[:batch_size]  # For debugging Theano graphs.
 
-        if self.concatenate_mask:
+        if self.use_mask_as_input:
             self.dataset.symb_inputs.tag.test_value = np.concatenate([self.dataset.symb_inputs.tag.test_value * self.dataset.mask_o_lt_d.tag.test_value,
                                                                       self.dataset.mask_o_lt_d.tag.test_value], axis=1)
 
@@ -57,8 +57,7 @@ class MiniBatchSchedulerWithAutoregressiveMask(MiniBatchScheduler):
         start = self.shared_batch_count * self._shared_batch_size
         end = (self.shared_batch_count + 1) * self._shared_batch_size
 
-        if self.concatenate_mask:
-
+        if self.use_mask_as_input:
             return {self.dataset.symb_inputs: T.concatenate([self.dataset.inputs[start:end] * self._shared_mask_o_lt_d[start:end],
                                                              self._shared_mask_o_lt_d[start:end]], axis=1),
                     self.dataset.symb_targets: self.dataset.targets[start:end],
@@ -90,7 +89,7 @@ class MiniBatchSchedulerWithAutoregressiveMask(MiniBatchScheduler):
     def save(self, savedir):
         state = {"version": 1,
                  "seed": self.seed,
-                 "concatenate_mask": self.concatenate_mask,
+                 "use_mask_as_input": self.use_mask_as_input,
                  "batch_size": self.batch_size,
                  "shared_batch_count": self.shared_batch_count.get_value(),
                  "rng": pickle.dumps(self.rng),
@@ -113,7 +112,7 @@ class MiniBatchSchedulerWithAutoregressiveMask(MiniBatchScheduler):
 class BatchSchedulerWithAutoregressiveMasks(BatchScheduler):
     """ Batch of padded examples.
     """
-    def __init__(self, dataset, batch_size, batch_id, ordering_id, concatenate_mask=False, seed=1234):
+    def __init__(self, dataset, batch_size, batch_id, ordering_id, use_mask_as_input=False, seed=1234):
         """
         Parameters
         ----------
@@ -127,7 +126,7 @@ class BatchSchedulerWithAutoregressiveMasks(BatchScheduler):
             regressive mask for each example.
         """
         super().__init__(dataset)
-        self.concatenate_mask = concatenate_mask
+        self.use_mask_as_input = use_mask_as_input
         self.seed = seed
         self.rng = np.random.RandomState(self.seed)
         self.batch_size = batch_size
@@ -146,7 +145,7 @@ class BatchSchedulerWithAutoregressiveMasks(BatchScheduler):
         for _ in range(ordering_id+1):
             self.rng.shuffle(self.ordering)
 
-        # Matrix mask that will be used when concatenting the mask.
+        # Matrix mask that will be used when concatenating the mask.
         self._shared_Moltd = sharedX(np.zeros((self.batch_end-self.batch_start, self.D)), name='Moltd')
 
         # Vector mask that will be broadcasted across all inputs.
@@ -166,7 +165,7 @@ class BatchSchedulerWithAutoregressiveMasks(BatchScheduler):
         self.Moltd.tag.test_value = self._shared_Moltd.get_value()[:(self.batch_end-self.batch_start)]
         self.mod.tag.test_value = self._shared_mod.get_value()[None, :]
 
-        if self.concatenate_mask:
+        if self.use_mask_as_input:
             self.dataset.symb_inputs.tag.test_value = np.concatenate([self.dataset.symb_inputs.tag.test_value * self.Moltd.tag.test_value,
                                                                       self.Moltd.tag.test_value], axis=1)
 
@@ -176,7 +175,7 @@ class BatchSchedulerWithAutoregressiveMasks(BatchScheduler):
 
     @property
     def givens(self):
-        if self.concatenate_mask:
+        if self.use_mask_as_input:
             return {self.dataset.symb_inputs: T.concatenate([self.dataset.inputs[self.batch_start:self.batch_end] * self._shared_Moltd,
                                                              self._shared_Moltd[self.batch_start:self.batch_end]], axis=1),
                     self.dataset.symb_targets: self.dataset.targets[self.batch_start:self.batch_end],
@@ -206,7 +205,7 @@ class BatchSchedulerWithAutoregressiveMasks(BatchScheduler):
     # def save(self, savedir):
     #     state = {"version": 1,
     #              "seed": self.seed,
-    #              "concatenate_mask": self.concatenate_mask,
+    #              "use_mask_as_input": self.use_mask_as_input,
     #              "batch_size": self.batch_size,
     #              "shared_batch_count": self.shared_batch_count.get_value(),
     #              "rng": pickle.dumps(self.rng),

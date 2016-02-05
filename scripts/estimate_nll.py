@@ -39,6 +39,7 @@ def build_argparser():
 
     return p
 
+
 def estimate_NLL(model, dataset, seed=1234):
     loss = BinaryCrossEntropyEstimateWithAutoRegressiveMask(model, dataset)
     status = Status()
@@ -57,7 +58,8 @@ def estimate_NLL(model, dataset, seed=1234):
         print("Estimating NLL using batch size of {}".format(batch_size))
         try:
             batch_scheduler.batch_size = batch_size
-            return float(nll.mean.view(status)), float(nll.stderror.view(status))
+            return {"mean": float(nll.mean.view(status)),
+                    "stderror": float(nll.stderror.view(status))}
 
         except MemoryError as e:
             # Probably not enough memory on GPU
@@ -83,7 +85,7 @@ def main():
     if not os.path.isdir(experiment_path):
         parser.error('Cannot find experiment: {0}!'.format(args.name))
 
-    if not os.path.isdir(pjoin(experiment_path, "model")):
+    if not os.path.isdir(pjoin(experiment_path, "DeepConvNADE")):
         parser.error('Cannot find model for experiment: {0}!'.format(experiment_path))
 
     if not os.path.isfile(pjoin(experiment_path, "hyperparams.json")):
@@ -102,29 +104,39 @@ def main():
             model_class = DeepConvNADE
 
         # Load the actual model.
-        model = model_class.create(pjoin(experiment_path, "model"))  # Create new instance
-        model.load(pjoin(experiment_path, "model"))  # Restore state.
-
-        print(str(model.convnet))
-        print(str(model.fullnet))
+        model = model_class.create(pjoin(experiment_path))  # Create new instance
+        model.load(pjoin(experiment_path))  # Restore state.
+        print(str(model))
 
     # Result files.
     result_file = pjoin(experiment_path, "results_estimate.json")
 
     if not os.path.isfile(result_file) or args.force:
         with Timer("Evaluating NLL estimate"):
-            results = {}
-            results['NLL_est._trainset'] = estimate_NLL(model, trainset, seed=args.seed)
-            results['NLL_est._validset'] = estimate_NLL(model, validset, seed=args.seed)
-            results['NLL_est._testset'] = estimate_NLL(model, testset, seed=args.seed)
-            utils.save_dict_to_json_file(result_file, results)
+            results = {"seed": args.seed}
+            results['trainset'] = estimate_NLL(model, trainset, seed=args.seed)
+            results['validset'] = estimate_NLL(model, validset, seed=args.seed)
+            results['testset'] = estimate_NLL(model, testset, seed=args.seed)
+            utils.save_dict_to_json_file(result_file, {"NLL_estimate": results})
     else:
         print("Loading saved results... (use --force to re-run evaluation)")
-        results = utils.load_dict_from_json_file(result_file)
+        #if not os.path.isfile(result_file+".bak"):
+        #    results = utils.load_dict_from_json_file(result_file)
+        #    os.rename(result_file, result_file+".bak")
+        #    new_results = {}
+        #    new_results['seed'] = args.seed
+        #    new_results['trainset'] = {'mean': results["NLL_est._trainset"][0],
+        #                               'stderror': results["NLL_est._trainset"][1]}
+        #    new_results['validset'] = {'mean': results["NLL_est._validset"][0],
+        #                               'stderror': results["NLL_est._validset"][1]}
+        #    new_results['testset'] = {'mean': results["NLL_est._testset"][0],
+        #                              'stderror': results["NLL_est._testset"][1]}
 
-    print("NLL estimate on trainset: {:.2f} ± {:.2f}".format(*results['NLL_est._trainset']))
-    print("NLL estimate on validset: {:.2f} ± {:.2f}".format(*results['NLL_est._validset']))
-    print("NLL estimate on testset:  {:.2f} ± {:.2f}".format(*results['NLL_est._testset']))
+        #    utils.save_dict_to_json_file(result_file, {"NLL_estimate": new_results})
+        results = utils.load_dict_from_json_file(result_file)['NLL_estimate']
+
+    for dataset in ['trainset', 'validset', 'testset']:
+        print("NLL estimate on {}: {:.2f} ± {:.2f}".format(dataset, results[dataset]['mean'], results[dataset]['stderror']))
 
 if __name__ == '__main__':
     main()

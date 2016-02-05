@@ -517,7 +517,8 @@ class DeepConvNADE(Model):
                  convnet_layers,
                  fullnet_layers,
                  ordering_seed=1234,
-                 consider_mask_as_channel=False):
+                 use_mask_as_input=False,
+                 hidden_activation="sigmoid"):
 
         self.has_convnet = len(convnet_layers) > 0
         self.has_fullnet = len(fullnet_layers) > 0
@@ -528,7 +529,8 @@ class DeepConvNADE(Model):
         self.image_shape = tuple(image_shape)
         self.nb_channels = nb_channels
         self.ordering_seed = ordering_seed
-        self.consider_mask_as_channel = consider_mask_as_channel
+        self.use_mask_as_input = use_mask_as_input
+        self.hidden_activation = hidden_activation
 
         if self.has_convnet:
             # Make sure the convolutional network outputs 'np.prod(self.image_shape)' units.
@@ -553,7 +555,7 @@ class DeepConvNADE(Model):
         hyperparams['image_shape'] = self.image_shape
         hyperparams['nb_channels'] = self.nb_channels
         hyperparams['ordering_seed'] = self.ordering_seed
-        hyperparams['consider_mask_as_channel'] = self.consider_mask_as_channel
+        hyperparams['use_mask_as_input'] = self.use_mask_as_input
         return hyperparams
 
     @property
@@ -588,11 +590,12 @@ class DeepConvNADE(Model):
     def save(self, path):
         savedir = smartutils.create_folder(pjoin(path, type(self).__name__))
 
-        hyperparameters = {'version': 1,
+        hyperparameters = {'version': 2,
                            'image_shape': self.image_shape,
                            'nb_channels': self.nb_channels,
                            'ordering_seed': self.ordering_seed,
-                           'consider_mask_as_channel': self.consider_mask_as_channel,
+                           'use_mask_as_input': self.use_mask_as_input,
+                           'hidden_activation': self.hidden_activation,
                            'has_convnet': self.has_convnet,
                            'has_fullnet': self.has_fullnet}
         smartutils.save_dict_to_json_file(pjoin(savedir, "meta.json"), {"name": self.__class__.__name__})
@@ -628,12 +631,17 @@ class DeepConvNADE(Model):
         if hyperparameters['has_fullnet']:
             fullnet = DeepModel.create(pjoin(loaddir, 'fullnet'))
 
+        if hyperparameters["version"] == 1:
+            use_mask_as_input = hyperparameters["consider_mask_as_channel"]
+        else:
+            use_mask_as_input = hyperparameters["use_mask_as_input"]
+
         return cls(image_shape=hyperparameters["image_shape"],
                    nb_channels=hyperparameters["nb_channels"],
                    convnet_layers=convnet.layers,
                    fullnet_layers=fullnet.layers,
                    ordering_seed=hyperparameters["ordering_seed"],
-                   consider_mask_as_channel=hyperparameters["consider_mask_as_channel"])
+                   use_mask_as_input=use_mask_as_input)
 
     def fprop(self, input, mask_o_lt_d, return_output_preactivation=False):
         """ Returns the theano graph that computes the fprop given an `input` and an `ordering`.
@@ -654,7 +662,7 @@ class DeepConvNADE(Model):
             input_masked = input * mask_o_lt_d
 
             nb_input_feature_maps = self.nb_channels
-            if self.consider_mask_as_channel:
+            if self.use_mask_as_input:
                 # nb_input_feature_maps += 1
                 nb_input_feature_maps = 2
                 if mask_o_lt_d.ndim == 1:
@@ -676,7 +684,7 @@ class DeepConvNADE(Model):
         pre_output_fully = 0
         if self.has_fullnet:
             input_masked_fully_connected = input * mask_o_lt_d
-            if self.consider_mask_as_channel:
+            if self.use_mask_as_input:
                 if mask_o_lt_d.ndim == 1:
                     input_masked_fully_connected = T.concatenate([input_masked_fully_connected, T.ones_like(input_masked_fully_connected)*mask_o_lt_d], axis=1)
                 else:
@@ -796,43 +804,6 @@ class DeepConvNADE(Model):
 
         return text[:-1]  # Do not return last \n
 
-    # @classmethod
-    # def create(cls, loaddir="./", hyperparams_filename="hyperparams", params_filename="params"):
-    #     hyperparams = load_dict_from_json_file(pjoin(loaddir, hyperparams_filename + ".json"))
-
-    #     hidden_activation = [v for k, v in hyperparams.items() if "activation" in k][0]
-    #     builder = DeepConvNADEBuilder(image_shape=hyperparams["image_shape"],
-    #                                   nb_channels=hyperparams["nb_channels"],
-    #                                   ordering_seed=hyperparams["ordering_seed"],
-    #                                   consider_mask_as_channel=hyperparams["consider_mask_as_channel"],
-    #                                   hidden_activation=hidden_activation)
-
-    #     # Rebuild convnet layers
-    #     layers_id = set()
-    #     for k, v in hyperparams.items():
-    #         if k.startswith("convnet_layer"):
-    #             layer_id = int(re.findall("convnet_layer([0-9]+)_", k)[0])
-    #             layers_id.add(layer_id)
-
-    #     convnet_blueprint = ""
-    #     for layer_id in sorted(layers_id):
-    #         border_mode = hyperparams["convnet_layer{}_border_mode".format(layer_id)]
-    #         nb_filters = hyperparams["convnet_layer{}_nb_filters".format(layer_id)]
-    #         filter_shape = tuple(hyperparams["convnet_layer{}_filter_shape".format(layer_id)])
-    #         convnet_blueprint += ""
-
-    #     # Rebuild fullnet layers
-
-    #     if args.convnet_blueprint is not None:
-    #         builder.build_convnet_from_blueprint(convnet_blueprint)
-
-    #     if args.fullnet_blueprint is not None:
-    #         builder.build_fullnet_from_blueprint(args.fullnet_blueprint)
-
-    #     model = builder.build()
-    #     model.load(loaddir, params_filename)
-    #     return model
-
     def build_sampling_function(self, seed=None):
         from smartpy.misc.utils import Timer
         from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
@@ -885,13 +856,13 @@ class DeepConvNADEBuilder(object):
                  image_shape,
                  nb_channels,
                  ordering_seed=1234,
-                 consider_mask_as_channel=False,
+                 use_mask_as_input=False,
                  hidden_activation="sigmoid"):
 
         self.image_shape = image_shape
         self.nb_channels = nb_channels
         self.ordering_seed = ordering_seed
-        self.consider_mask_as_channel = consider_mask_as_channel
+        self.use_mask_as_input = use_mask_as_input
         self.hidden_activation = hidden_activation
 
         self.convnet_layers = []
@@ -917,7 +888,8 @@ class DeepConvNADEBuilder(object):
                              convnet_layers=self.convnet_layers,
                              fullnet_layers=self.fullnet_layers,
                              ordering_seed=self.ordering_seed,
-                             consider_mask_as_channel=self.consider_mask_as_channel)
+                             use_mask_as_input=self.use_mask_as_input,
+                             hidden_activation=self.hidden_activation)
 
         return model
 
