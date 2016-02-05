@@ -46,7 +46,7 @@ def estimate_NLL(model, dataset, seed=1234):
 
     batch_scheduler = MiniBatchSchedulerWithAutoregressiveMask(dataset,
                                                                batch_size=len(dataset),
-                                                               concatenate_mask=model.nb_channels == 2,
+                                                               use_mask_as_input=model.nb_channels == 2,
                                                                keep_mask=True,
                                                                seed=seed)
 

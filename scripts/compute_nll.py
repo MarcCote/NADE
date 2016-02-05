@@ -90,7 +90,7 @@ def compute_NLL(model, dataset, batch_size, batch_id, ordering_id, seed):
                                                             batch_size=batch_size,
                                                             batch_id=batch_id,
                                                             ordering_id=ordering_id,
-                                                            concatenate_mask=model.nb_channels == 2,
+                                                            use_mask_as_input=model.nb_channels == 2,
                                                             seed=seed)
     loss = NllUsingBinaryCrossEntropyWithAutoRegressiveMask(model, dataset, mod=batch_scheduler.mod)
 
