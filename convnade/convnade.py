@@ -494,6 +494,8 @@ class DeepModel(Model):
                     layer = ConvolutionalLayer.create(loaddir_layer)
                 elif meta["name"] == "FullyConnectedLayer":
                     layer = FullyConnectedLayer.create(loaddir_layer)
+                elif meta["name"] == "Layer":
+                    layer = Layer.create(loaddir_layer)
                 else:
                     raise NameError("Unknown layer: {}".format(meta["name"]))
 
