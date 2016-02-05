@@ -175,7 +175,7 @@ def buildArgsParser():
     optimizer = optimizer.add_mutually_exclusive_group(required=True)
     optimizer.add_argument('--SGD', metavar="LR", type=str, help='use SGD with constant learning rate for training.')
     optimizer.add_argument('--AdaGrad', metavar="LR [EPS=1e-6]", type=str, help='use AdaGrad for training.')
-    optimizer.add_argument('--Adam', metavar="", type=str, help='use Adam for training.')
+    optimizer.add_argument('--Adam', action="store_true", help='use Adam for training.')
 
     # General options (optional)
     general = p.add_argument_group("General arguments")

@@ -54,7 +54,7 @@ def optimizer_factory(hyperparams, loss):
         eps = float(options[1]) if len(options) > 1 else 1e-6
         return AdaGrad(loss=loss, lr=lr, eps=eps)
 
-    elif hyperparams["Adam"] is not None:
+    elif hyperparams["Adam"]:
         from smartlearner.optimizers import Adam
         return Adam(loss=loss)
 
