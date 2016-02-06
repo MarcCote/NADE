@@ -103,11 +103,8 @@ def main():
     if not os.path.isdir(experiment_path):
         parser.error('Cannot find experiment: {0}!'.format(args.name))
 
-    if not os.path.isdir(pjoin(experiment_path, "model")):
-        parser.error('Cannot find model for experiment: {0}!'.format(experiment_path))
-
-    if not os.path.isfile(pjoin(experiment_path, "hyperparams.json")):
-        parser.error('Cannot find hyperparams for experiment: {0}!'.format(experiment_path))
+    if not os.path.isdir(pjoin(experiment_path, "evaluation")):
+        parser.error('Cannot find evaluations for experiment: {0}!'.format(experiment_path))
 
     results_file = pjoin(experiment_path, "results.json")
 
