@@ -118,7 +118,7 @@ def main():
         results = smartutils.load_dict_from_json_file(results_file)["NLL"]
 
     nb_orderings = results['nb_orderings']
-    for dataset in ['trainset', 'validset', 'testset']:
+    for dataset in ['validset', 'testset']:
         print("NLL estimate on {} ({} orderings): {:.2f} ± {:.2f}".format(dataset, nb_orderings, results[dataset]['mean'], results[dataset]['stderror']))
 
         if results[dataset]['incomplete']:
