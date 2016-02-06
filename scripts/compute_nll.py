@@ -153,7 +153,7 @@ def main():
                        "nb_batches": int(np.ceil(len(dataset)/float(args.batch_size))),
                        "ordering_id": args.ordering_id,
                        "nb_orderings": args.nb_orderings,
-                       "batch_size": batch_size,
+                       "batch_size": args.batch_size,
                        "seed": args.seed}
             np.savez(evaluation_file, **results)
 
