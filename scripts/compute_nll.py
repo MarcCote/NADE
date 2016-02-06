@@ -96,7 +96,7 @@ def compute_NLL(model, dataset, batch_size, batch_id, ordering_id, seed):
 
     nll = views.LossView(loss=loss, batch_scheduler=batch_scheduler)
     nlls_xod_given_xoltd = nll.losses.view(Status())
-    nlls = np.sum(nlls_xod_given_xoltd.reshape(-1, len(dataset)), axis=0)
+    nlls = np.sum(nlls_xod_given_xoltd.reshape(-1, batch_size), axis=0)
     return nlls
 
 
