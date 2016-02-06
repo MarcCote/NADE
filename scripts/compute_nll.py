@@ -113,7 +113,7 @@ def main():
     if not os.path.isdir(experiment_path):
         parser.error('Cannot find experiment: {0}!'.format(args.name))
 
-    if not os.path.isdir(pjoin(experiment_path, "model")):
+    if not os.path.isdir(pjoin(experiment_path, "DeepConvNADE")):
         parser.error('Cannot find model for experiment: {0}!'.format(experiment_path))
 
     if not os.path.isfile(pjoin(experiment_path, "hyperparams.json")):
@@ -132,8 +132,8 @@ def main():
             model_class = DeepConvNADE
 
         # Load the actual model.
-        model = model_class.create(pjoin(experiment_path, "model"))  # Create new instance
-        model.load(pjoin(experiment_path, "model"))  # Restore state.
+        model = model_class.create(experiment_path)  # Create new instance
+        model.load(experiment_path)  # Restore state.
         print(str(model))
 
     # Result files.
