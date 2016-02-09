@@ -87,14 +87,15 @@ def get_optimizer(e):
 def extract_result_from_experiment(e):
     """e: `Experiment` object"""
     entry = OrderedDict()
-    # entry["Convnet Blueprint"] = e.model_hyperparams.get("convnet_blueprint", "")
-    # entry["Fullnet Blueprint"] = e.model_hyperparams.get("fullnet_blueprint", "")
-    # entry["Concatenate Mask"] = e.model_hyperparams.get("use_mask_as_input", "")
-    # entry["Activation Function"] = e.model_hyperparams.get("hidden_activation", "")
-    entry["Convnet Blueprint"] = e.hyperparams.get("convnet_blueprint", "")
-    entry["Fullnet Blueprint"] = e.hyperparams.get("fullnet_blueprint", "")
-    entry["Concatenate Mask"] = e.hyperparams.get("concatenate_mask", "")
-    entry["Activation Function"] = e.hyperparams.get("hidden_activation", "")
+    # entry["Convnet Blueprint"] = e.hyperparams.get("convnet_blueprint", "")
+    # entry["Fullnet Blueprint"] = e.hyperparams.get("fullnet_blueprint", "")
+    # entry["Concatenate Mask"] = e.hyperparams.get("concatenate_mask", "")
+    # entry["Activation Function"] = e.hyperparams.get("hidden_activation", "")
+    entry["Convnet Blueprint"] = e.model_hyperparams.get("convnet_blueprint", "")
+    entry["Fullnet Blueprint"] = e.model_hyperparams.get("fullnet_blueprint", "")
+    entry["Concatenate Mask"] = e.model_hyperparams.get("use_mask_as_input", "")
+    entry["Activation Function"] = e.model_hyperparams.get("hidden_activation", "")
+
     entry["Initialization Seed"] = e.hyperparams.get("initialization_seed", "")
     entry["Weights Initialization"] = e.hyperparams.get("weights_initialization", "")
     entry["Look Ahead"] = e.hyperparams.get("lookahead", "")
@@ -114,7 +115,7 @@ def extract_result_from_experiment(e):
     entry["Validation NLL std"] = e.results["validset"]["stderror"]
     entry["Testing NLL"] = e.results["testset"]["mean"]
     entry["Testing NLL std"] = e.results["testset"]["stderror"]
-    entry["Nb. Orderings"] = e.results.get("hidden_activation", "")
+    entry["Nb. Orderings"] = e.results.get("nb_orderings", "")
     entry["Training Time"] = e.status.get("training_time", "")
     entry["Experiment"] = e.name
     return entry
