@@ -87,10 +87,10 @@ def get_optimizer(e):
 def extract_result_from_experiment(e):
     """e: `Experiment` object"""
     entry = OrderedDict()
-    # entry["Convnet Blueprint"] = e.hyperparams.get("convnet_blueprint", "")
-    # entry["Fullnet Blueprint"] = e.hyperparams.get("fullnet_blueprint", "")
-    entry["Convnet Blueprint"] = e.model_hyperparams.get("convnet_blueprint", "")
-    entry["Fullnet Blueprint"] = e.model_hyperparams.get("fullnet_blueprint", "")
+    entry["Convnet Blueprint"] = e.hyperparams.get("convnet_blueprint", "")
+    entry["Fullnet Blueprint"] = e.hyperparams.get("fullnet_blueprint", "")
+    # entry["Convnet Blueprint"] = e.model_hyperparams.get("convnet_blueprint", "")
+    # entry["Fullnet Blueprint"] = e.model_hyperparams.get("fullnet_blueprint", "")
 
     entry["Concatenate Mask"] = e.model_hyperparams.get("use_mask_as_input", "")
     entry["Activation Function"] = e.model_hyperparams.get("hidden_activation", "")
