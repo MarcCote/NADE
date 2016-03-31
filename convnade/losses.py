@@ -54,7 +54,7 @@ class NllUsingBinaryCrossEntropyWithAutoRegressiveMask(Loss):
 
         # Keep only the d-th conditional
         cross_entropies_masked = cross_entropies * self.mod
-        ln_p_xod_given_xoltd = -T.sum(cross_entropies_masked, axis=1)
+        ln_p_xod_given_xoltd = -T.sum(cross_entropies_masked, axis=1)  # Keep only the d-th conditional.
         nll_xod_given_xoltd = -ln_p_xod_given_xoltd
         return nll_xod_given_xoltd
 

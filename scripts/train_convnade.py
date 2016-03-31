@@ -31,7 +31,7 @@ from convnade.factories import WEIGHTS_INITIALIZERS, weigths_initializer_factory
 from convnade.factories import ACTIVATION_FUNCTIONS
 from convnade.factories import optimizer_factory
 
-from convnade import DeepConvNADEBuilder
+from convnade import DeepConvNADEBuilder, DeepConvNADEWithResidual, DeepConvNadeUsingLasagne, DeepConvNadeWithResidualUsingLasagne
 
 from convnade.batch_schedulers import MiniBatchSchedulerWithAutoregressiveMask
 from convnade.losses import BinaryCrossEntropyEstimateWithAutoRegressiveMask
@@ -56,7 +56,7 @@ from convnade.losses import BinaryCrossEntropyEstimateWithAutoRegressiveMask
 # from smartpy.models.convolutional_deepnade import EvaluateDeepNadeNLLEstimateOnTrivial
 
 DATASETS = ["binarized_mnist", "caltech101_silhouettes28"]
-MODELS = ['convnade', 'nade']
+MODELS = ['convnade', 'convnade-recipe', 'nade']
 
 
 def generate_blueprints(seed, image_shape):
@@ -139,7 +139,9 @@ def build_train_convnade_argparser(subparser):
     model.add_argument('--ordering-seed', type=int, help='seed used to generate new ordering. Default=1234', default=1234)
     model.add_argument('--use-mask-as-input', action='store_true',
                        help='if specified, concatenate the ordering mask $o_{<d}$ to the input. In the convolutional part this translates to adding a new channel.')
-    #model.add_argument('--finetune_on_trivial_orderings', action='store_true', help='finetune model using the 8 trivial orderings.')
+    # model.add_argument('--finetune_on_trivial_orderings', action='store_true', help='finetune model using the 8 trivial orderings.')
+    model.add_argument('--with-residual', action='store_true',
+                       help='if specified, train on residuals.')
 
     model.add_argument('--hidden-activation', type=str, choices=ACTIVATION_FUNCTIONS, default=ACTIVATION_FUNCTIONS[0],
                        help="Activation functions: {}".format(ACTIVATION_FUNCTIONS),)
@@ -151,6 +153,7 @@ def build_train_convnade_argparser(subparser):
     # General parameters (optional)
     general = p.add_argument_group("General arguments")
     general.add_argument('-f', '--force', action='store_true', help='restart training from scratch instead of resuming.')
+    general.add_argument('--use-lasagne', action='store_true', help='if specified, the DeepConvNadeUsingLasagne model will be used.')
 
 
 def buildArgsParser():
@@ -169,13 +172,16 @@ def buildArgsParser():
     training = p.add_argument_group("Training options")
     training.add_argument('--batch-size', type=int, metavar="M",
                           help='size of the batch to use when training the model. Default: 64.', default=64)
+    training.add_argument('--batch-norm', action='store_true', help='if specified, batch normalization will be used.')
 
     # Optimizer options
     optimizer = p.add_argument_group("Optimizer (required)")
     optimizer = optimizer.add_mutually_exclusive_group(required=True)
     optimizer.add_argument('--SGD', metavar="LR", type=str, help='use SGD with constant learning rate for training.')
     optimizer.add_argument('--AdaGrad', metavar="LR [EPS=1e-6]", type=str, help='use AdaGrad for training.')
-    optimizer.add_argument('--Adam', action="store_true", help='use Adam for training.')
+    optimizer.add_argument('--Adam', metavar="[LR=0.0001]", type=str, help='use Adam for training.')
+    optimizer.add_argument('--RMSProp', metavar="LR", type=str, help='use RMSProp for training.')
+    optimizer.add_argument('--Adadelta', action="store_true", help='use Adadelta for training.')
 
     # General options (optional)
     general = p.add_argument_group("General arguments")
@@ -225,7 +231,7 @@ def main():
             print("{\n" + "\n".join(["{}: {}".format(k, hyperparams[k]) for k in sorted(hyperparams.keys())]) + "\n}")
             print("{\n" + "\n".join(["{}: {}".format(k, hyperparams_loaded[k]) for k in sorted(hyperparams_loaded.keys())]) + "\n}")
             print("The arguments provided are different than the one saved. Use --force if you are certain.\nQuitting.")
-            exit(1)
+            sys.exit(1)
     else:
         if os.path.isdir(experiment_path):
             shutil.rmtree(experiment_path)
@@ -242,30 +248,58 @@ def main():
         batch_scheduler = MiniBatchSchedulerWithAutoregressiveMask(trainset, args.batch_size,
                                                                    use_mask_as_input=args.use_mask_as_input,
                                                                    seed=args.ordering_seed)
+        print("{} updates per epoch.".format(len(batch_scheduler)))
 
     with Timer("Building model"):
-        builder = DeepConvNADEBuilder(image_shape=image_shape,
-                                      nb_channels=nb_channels,
-                                      hidden_activation=args.hidden_activation,
-                                      use_mask_as_input=args.use_mask_as_input)
+        if args.use_lasagne:
+            if args.with_residual:
+                model = DeepConvNadeWithResidualUsingLasagne(image_shape=image_shape,
+                                                             nb_channels=nb_channels,
+                                                             convnet_blueprint=args.convnet_blueprint,
+                                                             fullnet_blueprint=args.fullnet_blueprint,
+                                                             hidden_activation=args.hidden_activation,
+                                                             use_mask_as_input=args.use_mask_as_input)
+            else:
+                model = DeepConvNadeUsingLasagne(image_shape=image_shape,
+                                                 nb_channels=nb_channels,
+                                                 convnet_blueprint=args.convnet_blueprint,
+                                                 fullnet_blueprint=args.fullnet_blueprint,
+                                                 hidden_activation=args.hidden_activation,
+                                                 use_mask_as_input=args.use_mask_as_input,
+                                                 use_batch_norm=args.batch_norm)
 
-        if args.blueprints_seed is not None:
-            convnet_blueprint, fullnet_blueprint = generate_blueprints(args.blueprint_seed, image_shape[0])
-            builder.build_convnet_from_blueprint(convnet_blueprint)
-            builder.build_fullnet_from_blueprint(fullnet_blueprint)
+        elif args.with_residual:
+            model = DeepConvNADEWithResidual(image_shape=image_shape,
+                                             nb_channels=nb_channels,
+                                             convnet_blueprint=args.convnet_blueprint,
+                                             fullnet_blueprint=args.fullnet_blueprint,
+                                             hidden_activation=args.hidden_activation,
+                                             use_mask_as_input=args.use_mask_as_input)
+
         else:
-            if args.convnet_blueprint is not None:
-                builder.build_convnet_from_blueprint(args.convnet_blueprint)
+            builder = DeepConvNADEBuilder(image_shape=image_shape,
+                                          nb_channels=nb_channels,
+                                          hidden_activation=args.hidden_activation,
+                                          use_mask_as_input=args.use_mask_as_input)
 
-            if args.fullnet_blueprint is not None:
-                builder.build_fullnet_from_blueprint(args.fullnet_blueprint)
+            if args.blueprints_seed is not None:
+                convnet_blueprint, fullnet_blueprint = generate_blueprints(args.blueprint_seed, image_shape[0])
+                builder.build_convnet_from_blueprint(convnet_blueprint)
+                builder.build_fullnet_from_blueprint(fullnet_blueprint)
+            else:
+                if args.convnet_blueprint is not None:
+                    builder.build_convnet_from_blueprint(args.convnet_blueprint)
 
-        model = builder.build()
+                if args.fullnet_blueprint is not None:
+                    builder.build_fullnet_from_blueprint(args.fullnet_blueprint)
 
-        print(str(model.convnet))
-        print(str(model.fullnet))
+            model = builder.build()
+            # print(str(model.convnet))
+            # print(str(model.fullnet))
+
         model.initialize(weigths_initializer_factory(args.weights_initialization,
                                                      seed=args.initialization_seed))
+        print(str(model))
 
     with Timer("Building optimizer"):
         loss = BinaryCrossEntropyEstimateWithAutoRegressiveMask(model, trainset)
@@ -292,18 +326,21 @@ def main():
         trainer.append_task(tasks.Print("Avg. training loss:     : {}", avg_loss))
 
         # Print NLL mean/stderror.
+        model.deterministic = True  # For batch normalization, see https://github.com/Lasagne/Lasagne/blob/master/lasagne/layers/normalization.py#L198
         nll = views.LossView(loss=BinaryCrossEntropyEstimateWithAutoRegressiveMask(model, validset),
                              batch_scheduler=MiniBatchSchedulerWithAutoregressiveMask(validset, batch_size=0.1*len(validset),
                                                                                       use_mask_as_input=args.use_mask_as_input,
                                                                                       keep_mask=True,
                                                                                       seed=args.ordering_seed+1))
+        # trainer.append_task(tasks.Print("Validset - NLL          : {0:.2f} ± {1:.2f}", nll.mean, nll.stderror, each_k_update=100))
         trainer.append_task(tasks.Print("Validset - NLL          : {0:.2f} ± {1:.2f}", nll.mean, nll.stderror))
+
+        # direction_norm = views.MonitorVariable(T.sqrt(sum(map(lambda d: T.sqr(d).sum(), loss.gradients.values()))))
+        # trainer.append_task(tasks.Print("||d|| : {0:.4f}", direction_norm, each_k_update=50))
 
         # Save training progression
         def save_model(*args):
             trainer.save(experiment_path)
-
-        # trainer.add_task(tasks.SaveProgression(model, experiment_path, each_epoch=1))
 
         trainer.append_task(stopping_criteria.EarlyStopping(nll.mean, lookahead=args.lookahead, eps=args.lookahead_eps, callback=save_model))
 

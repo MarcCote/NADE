@@ -587,6 +587,7 @@ class DeepConvNADE(Model):
             fullnet_output = self.fullnet.get_output(X)  # Returns the fullnet's output preactivation.
 
         output = convnet_output + fullnet_output
+        # TODO: sigmoid should be applied here instead of within loss function.
         return output
 
     def save(self, path):
@@ -638,12 +639,14 @@ class DeepConvNADE(Model):
         else:
             use_mask_as_input = hyperparameters["use_mask_as_input"]
 
-        return cls(image_shape=hyperparameters["image_shape"],
-                   nb_channels=hyperparameters["nb_channels"],
-                   convnet_layers=convnet.layers,
-                   fullnet_layers=fullnet.layers,
-                   ordering_seed=hyperparameters["ordering_seed"],
-                   use_mask_as_input=use_mask_as_input)
+        model = cls(image_shape=hyperparameters["image_shape"],
+                    nb_channels=hyperparameters["nb_channels"],
+                    convnet_layers=convnet.layers,
+                    fullnet_layers=fullnet.layers,
+                    ordering_seed=hyperparameters["ordering_seed"],
+                    use_mask_as_input=use_mask_as_input)
+        model.load(path)
+        return model
 
     def fprop(self, input, mask_o_lt_d, return_output_preactivation=False):
         """ Returns the theano graph that computes the fprop given an `input` and an `ordering`.
@@ -705,7 +708,7 @@ class DeepConvNADE(Model):
 
         return output
 
-    # def get_cross_entropies(self, input, mask_o_lt_d):
+    # # def get_cross_entropies(self, input, mask_o_lt_d):
     #     """ Returns the theano graph that computes the cross entropies for all input dimensions
     #     allowed by the mask `1-mask_o_lt_d` (i.e. the complementary mask).
 
@@ -806,8 +809,8 @@ class DeepConvNADE(Model):
 
         return text[:-1]  # Do not return last \n
 
-    def build_sampling_function(self, seed=None):
-        from smartpy.misc.utils import Timer
+    def build_sampling_function(self, seed=1234):
+        from .utils import Timer
         from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
         rng = np.random.RandomState(seed)
         theano_rng = RandomStreams(rng.randint(2**30))
@@ -816,16 +819,23 @@ class DeepConvNADE(Model):
         # $X$: batch of inputs (flatten images)
         input = T.matrix('input')
         # $o_d$: index of d-th dimension in the ordering.
-        mask_o_d = T.vector('mask_o_d')
+        mask_o_d = T.matrix('mask_o_d')
         # $o_{<d}$: indices of the d-1 first dimensions in the ordering.
-        mask_o_lt_d = T.vector('mask_o_lt_d')
+        mask_o_lt_d = T.matrix('mask_o_lt_d')
 
-        output = self.fprop(input, mask_o_lt_d)
+        # Prepare input
+        X = input*mask_o_lt_d
+        if self.nb_channels == 2:
+            X = T.concatenate([X, mask_o_lt_d], axis=1)
+
+        output = T.nnet.sigmoid(self.get_output(X))
+        # output = self.fprop(input, mask_o_lt_d)
+
         probs = T.sum(output*mask_o_d, axis=1)
         bits = theano_rng.binomial(p=probs, size=probs.shape, n=1, dtype=theano.config.floatX)
         sample_bit_plus = theano.function([input, mask_o_d, mask_o_lt_d], [bits, probs])
 
-        def _sample(nb_samples, ordering_seed=1234):
+        def _sample(nb_samples, return_probs=False, ordering_seed=1234):
             rng = np.random.RandomState(ordering_seed)
             D = int(np.prod(self.image_shape))
             ordering = np.arange(D)
@@ -844,13 +854,593 @@ class DeepConvNADE(Model):
                 for d, bit in enumerate(ordering):
                     if d % 100 == 0:
                         print(d)
-                    bits, probs = sample_bit_plus(samples, o_d[d], o_lt_d[d])
+                    bits, probs = sample_bit_plus(samples, np.tile(o_d[d], (nb_samples, 1)), np.tile(o_lt_d[d], (nb_samples, 1)))
                     samples[:, bit] = bits
                     samples_probs[:, bit] = probs
 
-                return samples_probs
+                if return_probs:
+                    return samples, samples_probs
+
+                return samples
 
         return _sample
+
+
+class DeepConvNadeUsingLasagne(DeepConvNADE):
+    def __init__(self,
+                 image_shape,
+                 nb_channels,
+                 convnet_blueprint,
+                 fullnet_blueprint,
+                 use_mask_as_input=False,
+                 hidden_activation="hinge",
+                 use_batch_norm=False):
+
+        super().__init__(image_shape, nb_channels, convnet_layers=[], fullnet_layers=[],
+                         ordering_seed=1234, use_mask_as_input=use_mask_as_input,
+                         hidden_activation=hidden_activation)
+
+        self._network = None
+        self._network_in = None
+        self.convnet_blueprint = convnet_blueprint
+        self.fullnet_blueprint = fullnet_blueprint
+        self.use_batch_norm = use_batch_norm
+        self.deterministic = not self.use_batch_norm
+
+    def initialize(self, weights_initializer=initer.UniformInitializer(random_seed=1234)):
+        for param in self.parameters:
+            if param.name.endswith(".W"):
+                weights_initializer(param)
+
+    @property
+    def parameters(self):
+        import lasagne
+        params = lasagne.layers.get_all_params(self.network, trainable=True)
+        return params
+
+    @property
+    def network(self):
+        if self._network is not None:
+            return self._network
+
+        # Build the computational graph using a dummy input.
+        import lasagne
+        from lasagne.layers.dnn import Conv2DDNNLayer as ConvLayer
+        from lasagne.layers import ElemwiseSumLayer, NonlinearityLayer, InputLayer, FlattenLayer, DenseLayer
+        from lasagne.layers import batch_norm
+        from lasagne.nonlinearities import rectify
+
+        self._network_in = InputLayer(shape=(None, self.nb_channels,) + self.image_shape, input_var=None)
+        network_out = []
+
+        if self.convnet_blueprint is not None:
+            convnet_layers = [self._network_in]
+            layer_blueprints = list(map(str.strip, self.convnet_blueprint.split("->")))
+            for i, layer_blueprint in enumerate(layer_blueprints, start=1):
+                # eg. "64@3x3(valid) -> 64@3x3(full)"
+                nb_filters, rest = layer_blueprint.split("@")
+                filter_shape, rest = rest.split("(")
+                nb_filters = int(nb_filters)
+                filter_shape = tuple(map(int, filter_shape.split("x")))
+                pad = rest[:-1]
+
+                preact = ConvLayer(convnet_layers[-1], num_filters=nb_filters, filter_size=filter_shape, stride=(1, 1),
+                                   nonlinearity=None, pad=pad, W=lasagne.init.HeNormal(gain='relu'),
+                                   name="layer_{}_conv".format(i))
+
+                if self.use_batch_norm:
+                    preact = batch_norm(preact)
+
+                layer = NonlinearityLayer(preact, nonlinearity=rectify)
+                convnet_layers.append(layer)
+
+            network_out.append(FlattenLayer(preact))
+
+        if self.fullnet_blueprint is not None:
+            fullnet_layers = [FlattenLayer(self._network_in)]
+            layer_blueprints = list(map(str.strip, self.fullnet_blueprint.split("->")))
+            for i, layer_blueprint in enumerate(layer_blueprints, start=1):
+                # e.g. "500 -> 500 -> 784"
+                hidden_size = int(layer_blueprint)
+
+                preact = DenseLayer(fullnet_layers[-1], num_units=hidden_size,
+                                    nonlinearity=None, W=lasagne.init.HeNormal(gain='relu'),
+                                    name="layer_{}_dense".format(i))
+
+                if self.use_batch_norm:
+                    preact = batch_norm(preact)
+
+                layer = NonlinearityLayer(preact, nonlinearity=rectify)
+                fullnet_layers.append(layer)
+
+            network_out.append(preact)
+
+        self._network = ElemwiseSumLayer(network_out)
+        # TODO: sigmoid should be applied here instead of within loss function.
+        print("Nb. of parameters in model: {}".format(lasagne.layers.count_params(self._network, trainable=True)))
+        return self._network
+
+    def get_output(self, X):
+        import lasagne
+        network = self.network
+        X = X.reshape((-1, self.nb_channels) + self.image_shape)
+        self._network_in.input_var = X  # Network will use X as its new input.
+        output = lasagne.layers.get_output(network, deterministic=self.deterministic)
+        return output
+
+    def save(self, path):
+        savedir = smartutils.create_folder(pjoin(path, type(self).__name__))
+
+        hyperparameters = {'version': 2,
+                           'image_shape': self.image_shape,
+                           'nb_channels': self.nb_channels,
+                           'convnet_blueprint': self.convnet_blueprint,
+                           'fullnet_blueprint': self.fullnet_blueprint,
+                           'hidden_activation': self.hidden_activation,
+                           'use_batch_norm': self.use_batch_norm}
+        smartutils.save_dict_to_json_file(pjoin(savedir, "hyperparams.json"), hyperparameters)
+
+        # Save model's parameters.
+        parameters = [param.get_value() for param in self.parameters]
+        np.savez(pjoin(savedir, "params.npz"), *parameters)
+
+    def load(self, path):
+        loaddir = pjoin(path, type(self).__name__)
+
+        # Load model's parameters (assume the parameters order is the same as saving time).
+        params = np.load(pjoin(loaddir, "params.npz"))
+        for i, param in enumerate(self.parameters):
+            try:
+                param.set_value(params["arr_{}".format(i)])
+            except:
+                param.set_value(params["arr_{}".format(i)].item().get_value())
+
+    @classmethod
+    def create(cls, path):
+        loaddir = pjoin(path, cls.__name__)
+        hyperparameters = smartutils.load_dict_from_json_file(pjoin(loaddir, "hyperparams.json"))
+
+        model = cls(image_shape=hyperparameters["image_shape"],
+                    nb_channels=hyperparameters["nb_channels"],
+                    convnet_blueprint=hyperparameters['convnet_blueprint'],
+                    fullnet_blueprint=hyperparameters['fullnet_blueprint'],
+                    hidden_activation=hyperparameters['hidden_activation'],
+                    use_batch_norm=hyperparameters.get('use_batch_norm', False))
+        model.load(path)
+        return model
+
+    def __str__(self):
+        return "ConvNADE Lasagne with:\n  conv: {}\n  full:{}".format(self.convnet_blueprint, self.fullnet_blueprint)
+
+
+class DeepConvNadeWithResidualUsingLasagne(DeepConvNADE):
+    def __init__(self,
+                 image_shape,
+                 nb_channels,
+                 convnet_blueprint,
+                 fullnet_blueprint,
+                 use_mask_as_input=False,
+                 hidden_activation="hinge"):
+
+        super().__init__(image_shape, nb_channels, convnet_layers=[], fullnet_layers=[],
+                         ordering_seed=1234, use_mask_as_input=use_mask_as_input,
+                         hidden_activation=hidden_activation)
+
+        self._network = None
+        self._network_in = None
+        self.deterministic = True
+        self.convnet_blueprint = convnet_blueprint
+        self.fullnet_blueprint = fullnet_blueprint
+
+    def initialize(self, weights_initializer=initer.UniformInitializer(random_seed=1234)):
+        # Split initialization in two to make sure the weights of the non-shorcut layers are
+        # identical to those of DeepConvNadeUsingLasagne.
+        for param in self.parameters:
+            if param.name.endswith(".W") and "shortcut" not in param.name:
+                weights_initializer(param)
+
+        for param in self.parameters:
+            if param.name.endswith(".W") and "shortcut" in param.name:
+                weights_initializer(param)
+
+        pass  # Initialization is done when building the network for the first time.
+
+    @property
+    def parameters(self):
+        import lasagne
+        params = lasagne.layers.get_all_params(self.network, trainable=True)
+        return params
+
+    @property
+    def network(self):
+        if self._network is not None:
+            return self._network
+
+        # Build the computational graph using a dummy input.
+        import lasagne
+        from lasagne.layers.dnn import Conv2DDNNLayer as ConvLayer
+        from lasagne.layers import ElemwiseSumLayer, NonlinearityLayer, InputLayer, FlattenLayer, DenseLayer
+        # from lasagne.layers import batch_norm
+        from lasagne.nonlinearities import rectify
+
+        self._network_in = InputLayer(shape=(None, self.nb_channels,) + self.image_shape, input_var=None)
+        network_out = []
+
+        if self.convnet_blueprint is not None:
+            convnet_layers = [self._network_in]
+            shortcut_from = self._network_in
+            layer_blueprints = list(map(str.strip, self.convnet_blueprint.split("->")))
+            for i, layer_blueprint in enumerate(layer_blueprints, start=1):
+                # eg. "64@3x3(valid) -> 64@3x3(full)"
+                nb_filters, rest = layer_blueprint.split("@")
+                filter_shape, rest = rest.split("(")
+                nb_filters = int(nb_filters)
+                filter_shape = tuple(map(int, filter_shape.split("x")))
+                pad = rest[:-1]
+
+                preact = ConvLayer(convnet_layers[-1], num_filters=nb_filters, filter_size=filter_shape, stride=(1, 1),
+                                   nonlinearity=None, pad=pad, W=lasagne.init.HeNormal(gain='relu'),
+                                   name="layer_{}_conv".format(i))
+
+                if i > 1:
+                    # Add residual
+                    shortcut_filter_shape = np.array(shortcut_from.output_shape[-2:]) - np.array(preact.output_shape[-2:])
+
+                    if np.all(shortcut_filter_shape != 0):
+                        pad = 'full' if shortcut_filter_shape[0] < 0 else 'valid'
+                        shortcut_filter_shape += np.sign(shortcut_filter_shape)
+                        # Shortcut with a projection.
+                        shortcut = ConvLayer(shortcut_from, num_filters=nb_filters, filter_size=map(int, np.abs(shortcut_filter_shape)), stride=(1, 1),
+                                             nonlinearity=None, pad=pad, W=lasagne.init.HeNormal(gain='relu'),
+                                             name="shortcut_{}-{}_conv".format(i-1, i))
+
+                    elif np.all(shortcut_filter_shape == 0):
+                        shortcut = ConvLayer(shortcut_from, num_filters=nb_filters, filter_size=(1, 1), stride=(1, 1),
+                                             nonlinearity=None, pad=pad, W=lasagne.init.HeNormal(gain='relu'),
+                                             name="shortcut_{}-{}_conv".format(i-1, i))
+
+                    else:
+                        raise NameError("Shortcuts when using anisotropic filter are not supported.")
+
+                    preact = ElemwiseSumLayer([shortcut, preact])
+                    shortcut_from = preact  # Prepare next shorcut
+
+                layer = NonlinearityLayer(preact, nonlinearity=rectify)
+                convnet_layers.append(layer)
+
+            network_out.append(FlattenLayer(preact))
+
+        if self.fullnet_blueprint is not None:
+            fullnet_layers = [FlattenLayer(self._network_in)]
+            shortcut_from = self._network_in
+            layer_blueprints = list(map(str.strip, self.fullnet_blueprint.split("->")))
+            for i, layer_blueprint in enumerate(layer_blueprints, start=1):
+                # e.g. "500 -> 500 -> 784"
+                hidden_size = int(layer_blueprint)
+
+                preact = DenseLayer(fullnet_layers[-1], num_units=hidden_size,
+                                    nonlinearity=None, W=lasagne.init.HeNormal(gain='relu'),
+                                    name="layer_{}_dense".format(i))
+
+                if i > 1:
+                    # Add residual
+                    shortcut = DenseLayer(shortcut_from, num_units=hidden_size,
+                                          nonlinearity=None, W=lasagne.init.HeNormal(gain='relu'),
+                                          name="shortcut_{}-{}_conv".format(i-1, i))
+                    preact = ElemwiseSumLayer([shortcut, preact])
+                    shortcut_from = preact  # Prepare next shorcut
+
+                layer = NonlinearityLayer(preact, nonlinearity=rectify)
+                fullnet_layers.append(layer)
+
+            network_out.append(preact)
+
+        self._network = ElemwiseSumLayer(network_out)
+        # TODO: sigmoid should be applied here instead of within loss function.
+        print("Nb. of parameters in model: {}".format(lasagne.layers.count_params(self._network, trainable=True)))
+        return self._network
+
+    def get_output(self, X):
+        import lasagne
+        network = self.network
+        X = X.reshape((-1, self.nb_channels) + self.image_shape)
+        self._network_in.input_var = X  # Network will use X as its new input.
+        output = lasagne.layers.get_output(network, deterministic=self.deterministic)
+        return output
+
+    def save(self, path):
+        savedir = smartutils.create_folder(pjoin(path, type(self).__name__))
+
+        hyperparameters = {'version': 1,
+                           'image_shape': self.image_shape,
+                           'nb_channels': self.nb_channels,
+                           'convnet_blueprint': self.convnet_blueprint,
+                           'fullnet_blueprint': self.fullnet_blueprint,
+                           'hidden_activation': self.hidden_activation}
+        smartutils.save_dict_to_json_file(pjoin(savedir, "hyperparams.json"), hyperparameters)
+
+        # Save model's parameters.
+        parameters = [param.get_value() for param in self.parameters]
+        np.savez(pjoin(savedir, "params.npz"), *parameters)
+
+    def load(self, path):
+        loaddir = pjoin(path, type(self).__name__)
+
+        # Load model's parameters (assume the parameters order is the same as saving time).
+        params = np.load(pjoin(loaddir, "params.npz"))
+        for i, param in enumerate(self.parameters):
+            try:
+                param.set_value(params["arr_{}".format(i)])
+            except:
+                param.set_value(params["arr_{}".format(i)].item().get_value())
+
+    @classmethod
+    def create(cls, path):
+        loaddir = pjoin(path, cls.__name__)
+        hyperparameters = smartutils.load_dict_from_json_file(pjoin(loaddir, "hyperparams.json"))
+
+        model = cls(image_shape=hyperparameters["image_shape"],
+                    nb_channels=hyperparameters["nb_channels"],
+                    convnet_blueprint=hyperparameters['convnet_blueprint'],
+                    fullnet_blueprint=hyperparameters['fullnet_blueprint'],
+                    hidden_activation=hyperparameters['hidden_activation'])
+        model.load(path)
+        return model
+
+    def __str__(self):
+        return "ConvNADE w/ residuals Lasagne with:\n  conv: {}\n  full:{}".format(self.convnet_blueprint, self.fullnet_blueprint)
+
+
+class DeepConvNADEWithResidual2(DeepConvNADE):
+    def __init__(self,
+                 image_shape,
+                 nb_channels,
+                 use_mask_as_input=False,
+                 hidden_activation="sigmoid"):
+
+        super().__init__(image_shape, nb_channels, convnet_layers=[], fullnet_layers=[],
+                         ordering_seed=1234, use_mask_as_input=use_mask_as_input,
+                         hidden_activation=hidden_activation)
+
+        self._network = None
+        self._network_in = None
+        self.deterministic = False
+
+    def initialize(self, weights_initializer=initer.UniformInitializer(random_seed=1234)):
+        pass
+
+    @property
+    def parameters(self):
+        import lasagne
+        params = lasagne.layers.get_all_params(self.network, trainable=True)
+        return params
+
+    @property
+    def network(self):
+        if self._network is not None:
+            return self._network
+
+        # Build the computational graph using a dummy input.
+        import lasagne
+        from lasagne.layers.dnn import Conv2DDNNLayer as ConvLayer
+        from lasagne.layers import ElemwiseSumLayer, NonlinearityLayer, ExpressionLayer, PadLayer, InputLayer, FlattenLayer
+        from lasagne.layers import batch_norm
+        from lasagne.nonlinearities import rectify
+
+        n = 5  # TODO: change this
+
+        # create a residual learning building block with two stacked 3x3 convlayers as in paper
+        def residual_block(l, increase_dim=False, projection=False):
+            input_num_filters = l.output_shape[1]
+            if increase_dim:
+                first_stride = (2, 2)
+                out_num_filters = input_num_filters*2
+            else:
+                first_stride = (1, 1)
+                out_num_filters = input_num_filters
+
+            stack_1 = batch_norm(ConvLayer(l, num_filters=out_num_filters, filter_size=(3, 3), stride=first_stride, nonlinearity=rectify, pad='same', W=lasagne.init.HeNormal(gain='relu')))
+            stack_2 = batch_norm(ConvLayer(stack_1, num_filters=out_num_filters, filter_size=(3, 3), stride=(1, 1), nonlinearity=None, pad='same', W=lasagne.init.HeNormal(gain='relu')))
+
+            # add shortcut connections
+            if increase_dim:
+                if projection:
+                    # projection shortcut, as option B in paper
+                    projection = batch_norm(ConvLayer(l, num_filters=out_num_filters, filter_size=(1, 1), stride=(2, 2), nonlinearity=None, pad='same', b=None))
+                    block = NonlinearityLayer(ElemwiseSumLayer([stack_2, projection]), nonlinearity=rectify)
+                else:
+                    # identity shortcut, as option A in paper
+                    identity = ExpressionLayer(l, lambda X: X[:, :, ::2, ::2], lambda s: (s[0], s[1], s[2]//2, s[3]//2))
+                    padding = PadLayer(identity, [out_num_filters//4, 0, 0], batch_ndim=1)
+                    block = NonlinearityLayer(ElemwiseSumLayer([stack_2, padding]), nonlinearity=rectify)
+            else:
+                block = NonlinearityLayer(ElemwiseSumLayer([stack_2, l]), nonlinearity=rectify)
+
+            return block
+
+        # Building the network
+        self._network_in = InputLayer(shape=(None, self.nb_channels,) + self.image_shape, input_var=None)
+
+        # first layer, output is 16 x 28 x 28
+        l = batch_norm(ConvLayer(self._network_in, num_filters=16, filter_size=(3, 3), stride=(1, 1), nonlinearity=rectify, pad='same', W=lasagne.init.HeNormal(gain='relu')))
+
+        # first stack of residual blocks, output is 16 x 28 x 28
+        for _ in range(n):
+            l = residual_block(l)
+
+        # second stack of residual blocks, output is 32 x 14 x 14
+        l = residual_block(l, increase_dim=True)
+        for _ in range(1, n):
+            l = residual_block(l)
+
+        # third stack of residual blocks, output is 64 x 7 x 7
+        l = residual_block(l, increase_dim=True)
+        for _ in range(1, n):
+            l = residual_block(l)
+
+        # conv layer to obtain output of 784 x 1 x 1 (i.e. input size)
+        l = ConvLayer(l, num_filters=int(np.prod(self.image_shape)), filter_size=(7, 7), stride=(1, 1), nonlinearity=None, pad='valid', W=lasagne.init.HeNormal(gain='relu'))
+
+        self._network = FlattenLayer(l)
+        # network = DenseLayer(l, num_units=int(np.prod(self.image_shape)),
+        #                      W=lasagne.init.HeNormal(),
+        #                      nonlinearity=None)
+
+        print("Nb. of parameters in model: {}".format(lasagne.layers.count_params(self._network, trainable=True)))
+        return self._network
+
+    def get_output(self, X):
+        import lasagne
+        network = self.network
+        X = X.reshape((-1, self.nb_channels) + self.image_shape)
+        self._network_in.input_var = X  # Network will use X as its new input.
+        output = lasagne.layers.get_output(network, deterministic=self.deterministic)
+        return output
+
+    def save(self, path):
+        savedir = smartutils.create_folder(pjoin(path, type(self).__name__))
+
+        hyperparameters = {'version': 2,
+                           'image_shape': self.image_shape,
+                           'nb_channels': self.nb_channels,
+                           'ordering_seed': self.ordering_seed,
+                           'use_mask_as_input': self.use_mask_as_input,
+                           'hidden_activation': self.hidden_activation,
+                           'has_convnet': self.has_convnet,
+                           'has_fullnet': self.has_fullnet}
+        smartutils.save_dict_to_json_file(pjoin(savedir, "meta.json"), {"name": self.__class__.__name__})
+        smartutils.save_dict_to_json_file(pjoin(savedir, "hyperparams.json"), hyperparameters)
+
+        # Save residual parameters for the projection shortcuts.
+        np.savez(pjoin(savedir, "params.npz"), *self.parameters)
+
+    def load(self, path):
+        loaddir = pjoin(path, type(self).__name__)
+        self.convnet.load(pjoin(loaddir, 'convnet'))
+        self.fullnet.load(pjoin(loaddir, 'fullnet'))
+
+        # Load residual parameters for the projection shortcuts.
+        params = np.load(pjoin(loaddir, "params.npz"))
+        for i, param in enumerate(self.parameters):
+            param.set_value(params["arr_{}".format(i)])
+
+
+class DeepConvNADEWithResidual(DeepConvNADE):
+    """
+    This network, with N layers, has residual shortcuts between each pair of layer (i, N-i).
+    """
+    def __init__(self,
+                 image_shape,
+                 nb_channels,
+                 convnet_blueprint,
+                 fullnet_blueprint,
+                 use_mask_as_input=False,
+                 hidden_activation="sigmoid"):
+
+        super().__init__(image_shape, nb_channels, convnet_layers=[], fullnet_layers=[],
+                         ordering_seed=1234, use_mask_as_input=use_mask_as_input,
+                         hidden_activation=hidden_activation)
+
+        self._network = None
+        self._network_in = None
+        self.deterministic = True
+        self.convnet_blueprint = convnet_blueprint
+        self.fullnet_blueprint = fullnet_blueprint
+
+    def initialize(self, weights_initializer=initer.UniformInitializer(random_seed=1234)):
+        pass
+
+    @property
+    def parameters(self):
+        import lasagne
+        params = lasagne.layers.get_all_params(self.network, trainable=True)
+        return params
+
+    @property
+    def network(self):
+        if self._network is not None:
+            return self._network
+
+        # Build the computational graph using a dummy input.
+        import lasagne
+        from lasagne.layers.dnn import Conv2DDNNLayer as ConvLayer
+        from lasagne.layers import ElemwiseSumLayer, NonlinearityLayer, ExpressionLayer, PadLayer, InputLayer, FlattenLayer, SliceLayer
+        # from lasagne.layers import batch_norm
+        from lasagne.nonlinearities import rectify
+
+        self._network_in = InputLayer(shape=(None, self.nb_channels,) + self.image_shape, input_var=None)
+
+        convnet_layers = [self._network_in]
+        convnet_layers_preact = [self._network_in]
+        layer_blueprints = list(map(str.strip, self.convnet_blueprint.split("->")))
+        for i, layer_blueprint in enumerate(layer_blueprints, start=1):
+            "64@3x3(valid) -> 64@3x3(full)"
+            nb_filters, rest = layer_blueprint.split("@")
+            filter_shape, rest = rest.split("(")
+            nb_filters = int(nb_filters)
+            filter_shape = tuple(map(int, filter_shape.split("x")))
+            pad = rest[:-1]
+
+            preact = ConvLayer(convnet_layers[-1], num_filters=nb_filters, filter_size=filter_shape, stride=(1, 1), nonlinearity=None, pad=pad, W=lasagne.init.HeNormal(gain='relu'))
+
+            if i > len(layer_blueprints) // 2 and i != len(layer_blueprints):
+                shortcut = convnet_layers_preact[len(layer_blueprints)-i]
+                if i == len(layer_blueprints):
+                    if preact.output_shape[1] != shortcut.output_shape[1]:
+                        shortcut = SliceLayer(shortcut, slice(0, 1), axis=1)
+                    else:
+                        raise NameError("Something is wrong.")
+
+                print("Shortcut from {} to {}".format(len(layer_blueprints)-i, i))
+                preact = ElemwiseSumLayer([preact, shortcut])
+
+            convnet_layers_preact.append(preact)
+
+            layer = NonlinearityLayer(preact, nonlinearity=rectify)
+            convnet_layers.append(layer)
+
+        self._network = FlattenLayer(preact)
+        # network = DenseLayer(l, num_units=int(np.prod(self.image_shape)),
+        #                      W=lasagne.init.HeNormal(),
+        #                      nonlinearity=None)
+
+        print("Nb. of parameters in model: {}".format(lasagne.layers.count_params(self._network, trainable=True)))
+        return self._network
+
+    def get_output(self, X):
+        import lasagne
+        network = self.network
+        X = X.reshape((-1, self.nb_channels) + self.image_shape)
+        self._network_in.input_var = X  # Network will use X as its new input.
+        output = lasagne.layers.get_output(network, deterministic=self.deterministic)
+        return output
+
+    def save(self, path):
+        savedir = smartutils.create_folder(pjoin(path, type(self).__name__))
+
+        hyperparameters = {'version': 2,
+                           'image_shape': self.image_shape,
+                           'nb_channels': self.nb_channels,
+                           'ordering_seed': self.ordering_seed,
+                           'use_mask_as_input': self.use_mask_as_input,
+                           'hidden_activation': self.hidden_activation,
+                           'has_convnet': self.has_convnet,
+                           'has_fullnet': self.has_fullnet}
+        smartutils.save_dict_to_json_file(pjoin(savedir, "meta.json"), {"name": self.__class__.__name__})
+        smartutils.save_dict_to_json_file(pjoin(savedir, "hyperparams.json"), hyperparameters)
+
+        # Save residual parameters for the projection shortcuts.
+        np.savez(pjoin(savedir, "params.npz"), *self.parameters)
+
+    def load(self, path):
+        loaddir = pjoin(path, type(self).__name__)
+        self.convnet.load(pjoin(loaddir, 'convnet'))
+        self.fullnet.load(pjoin(loaddir, 'fullnet'))
+
+        # Load residual parameters for the projection shortcuts.
+        params = np.load(pjoin(loaddir, "params.npz"))
+        for i, param in enumerate(self.parameters):
+            param.set_value(params["arr_{}".format(i)])
 
 
 class DeepConvNADEBuilder(object):
