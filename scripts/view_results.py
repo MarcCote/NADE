@@ -39,7 +39,7 @@ class Experiment(object):
         self.results_file = pjoin(self.experiment_path, "results.json")
         self.results_estimate_file = pjoin(self.experiment_path, "results_estimate.json")
         self.hyperparams_file = pjoin(self.experiment_path, "hyperparams.json")
-        self.model_hyperparams_file = pjoin(self.experiment_path, "DeepConvNADE", "hyperparams.json")
+        # self.model_hyperparams_file = pjoin(self.experiment_path, "DeepConvNADE", "hyperparams.json")
         self.status_file = pjoin(self.experiment_path, "training", "status.json")
         self.early_stopping_file = pjoin(self.experiment_path, "training", "tasks", "early_stopping.json")
 
@@ -55,7 +55,7 @@ class Experiment(object):
             self.results_estimate = load_dict_from_json_file(self.results_estimate_file)["NLL_estimate"]
 
         self.hyperparams = load_dict_from_json_file(self.hyperparams_file)
-        self.model_hyperparams = load_dict_from_json_file(self.model_hyperparams_file)
+        # self.model_hyperparams = load_dict_from_json_file(self.model_hyperparams_file)
         self.status = load_dict_from_json_file(self.status_file)
 
         self.early_stopping = empty_results
@@ -92,8 +92,8 @@ def extract_result_from_experiment(e):
     # entry["Convnet Blueprint"] = e.model_hyperparams.get("convnet_blueprint", "")
     # entry["Fullnet Blueprint"] = e.model_hyperparams.get("fullnet_blueprint", "")
 
-    entry["Concatenate Mask"] = e.model_hyperparams.get("use_mask_as_input", "")
-    entry["Activation Function"] = e.model_hyperparams.get("hidden_activation", "")
+    entry["Concatenate Mask"] = e.hyperparams.get("use_mask_as_input", "")
+    entry["Activation Function"] = e.hyperparams.get("hidden_activation", "")
     entry["Initialization Seed"] = e.hyperparams.get("initialization_seed", "")
     entry["Weights Initialization"] = e.hyperparams.get("weights_initialization", "")
     entry["Look Ahead"] = e.hyperparams.get("lookahead", "")
