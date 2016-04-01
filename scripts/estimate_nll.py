@@ -15,10 +15,10 @@ from os.path import join as pjoin
 
 from smartlearner import views
 from smartlearner.status import Status
+from smartlearner import utils as smartutils
 
 from convnade import utils
 from convnade import datasets
-from smartlearner import utils as smartutils
 from convnade.utils import Timer
 
 from convnade.batch_schedulers import MiniBatchSchedulerWithAutoregressiveMask
