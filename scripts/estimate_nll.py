@@ -18,6 +18,7 @@ from smartlearner.status import Status
 
 from convnade import utils
 from convnade import datasets
+from smartlearner import utils as smartutils
 from convnade.utils import Timer
 
 from convnade.batch_schedulers import MiniBatchSchedulerWithAutoregressiveMask
@@ -30,9 +31,11 @@ def build_argparser():
     DESCRIPTION = "Evaluate the NLL estimate of a ConvNADE model."
     p = argparse.ArgumentParser(description=DESCRIPTION)
 
-    p.add_argument('name', type=str, help='name/path of the experiment.')
+    p.add_argument('experiment', type=str, help='folder where to find a trained ConvDeepNADE model')
     p.add_argument('--seed', type=int,
                    help="Seed used to choose the orderings. Default: 1234", default=1234)
+    p.add_argument('--batch-size', type=int,
+                   help='if specified, will use try this batch_size first and will reduce it if needed.')
 
     # Optional parameters
     p.add_argument('-f', '--force',  action='store_true', help='overwrite evaluation results')
@@ -40,7 +43,10 @@ def build_argparser():
     return p
 
 
-def estimate_NLL(model, dataset, seed=1234):
+def estimate_NLL(model, dataset, seed=1234, batch_size=None):
+    if batch_size is None:
+        batch_size = len(dataset)
+
     loss = BinaryCrossEntropyEstimateWithAutoRegressiveMask(model, dataset)
     status = Status()
 
@@ -53,11 +59,10 @@ def estimate_NLL(model, dataset, seed=1234):
     nll = views.LossView(loss=loss, batch_scheduler=batch_scheduler)
 
     # Try different size of batch size.
-    batch_size = len(dataset)
     while batch_size >= 1:
         print("Estimating NLL using batch size of {}".format(batch_size))
         try:
-            batch_scheduler.batch_size = batch_size
+            batch_scheduler.batch_size = min(batch_size, len(dataset))
             return {"mean": float(nll.mean.view(status)),
                     "stderror": float(nll.stderror.view(status))}
 
@@ -77,67 +82,52 @@ def estimate_NLL(model, dataset, seed=1234):
     raise RuntimeError("Cannot find a suitable batch size to estimate NLL. Try using CPU instead or a GPU with more memory.")
 
 
+def load_model(experiment_path):
+    with Timer("Loading model"):
+        from convnade import DeepConvNadeUsingLasagne, DeepConvNadeWithResidualUsingLasagne
+        from convnade import DeepConvNADE, DeepConvNADEWithResidual
+
+        for model_class in [DeepConvNadeUsingLasagne, DeepConvNadeWithResidualUsingLasagne, DeepConvNADE, DeepConvNADEWithResidual]:
+            try:
+                model = model_class.create(experiment_path)
+                return model
+            except Exception as e:
+                print (e)
+                pass
+
+    raise NameError("No model found!")
+    return None
+
+
 def main():
     parser = build_argparser()
     args = parser.parse_args()
 
-    # Get experiment folder
-    experiment_path = args.name
-    if not os.path.isdir(experiment_path):
-        # If not a directory, it must be the name of the experiment.
-        experiment_path = pjoin(".", "experiments", args.name)
-
-    if not os.path.isdir(experiment_path):
-        parser.error('Cannot find experiment: {0}!'.format(args.name))
-
-    if not os.path.isdir(pjoin(experiment_path, "DeepConvNADE")):
-        parser.error('Cannot find model for experiment: {0}!'.format(experiment_path))
-
-    if not os.path.isfile(pjoin(experiment_path, "hyperparams.json")):
-        parser.error('Cannot find hyperparams for experiment: {0}!'.format(experiment_path))
-
     # Load experiments hyperparameters
-    hyperparams = utils.load_dict_from_json_file(pjoin(experiment_path, "hyperparams.json"))
+    try:
+        hyperparams = smartutils.load_dict_from_json_file(pjoin(args.experiment, "hyperparams.json"))
+    except:
+        hyperparams = smartutils.load_dict_from_json_file(pjoin(args.experiment, '..', "hyperparams.json"))
+
+    model = load_model(args.experiment)
+    print(str(model))
 
     with Timer("Loading dataset"):
         trainset, validset, testset = datasets.load(hyperparams['dataset'], keep_on_cpu=True)
         print(" (data: {:,}; {:,}; {:,}) ".format(len(trainset), len(validset), len(testset)), end="")
 
-    with Timer("Loading model"):
-        if hyperparams["model"] == "convnade":
-            from convnade import DeepConvNADE
-            model_class = DeepConvNADE
-
-        # Load the actual model.
-        model = model_class.create(pjoin(experiment_path))  # Create new instance
-        model.load(pjoin(experiment_path))  # Restore state.
-        print(str(model))
-
     # Result files.
-    result_file = pjoin(experiment_path, "results_estimate.json")
+    result_file = pjoin(args.experiment, "results_estimate.json")
 
     if not os.path.isfile(result_file) or args.force:
         with Timer("Evaluating NLL estimate"):
             results = {"seed": args.seed}
-            results['trainset'] = estimate_NLL(model, trainset, seed=args.seed)
-            results['validset'] = estimate_NLL(model, validset, seed=args.seed)
-            results['testset'] = estimate_NLL(model, testset, seed=args.seed)
+            results['trainset'] = estimate_NLL(model, trainset, seed=args.seed, batch_size=args.batch_size)
+            results['validset'] = estimate_NLL(model, validset, seed=args.seed, batch_size=args.batch_size)
+            results['testset'] = estimate_NLL(model, testset, seed=args.seed, batch_size=args.batch_size)
             utils.save_dict_to_json_file(result_file, {"NLL_estimate": results})
     else:
         print("Loading saved results... (use --force to re-run evaluation)")
-        #if not os.path.isfile(result_file+".bak"):
-        #    results = utils.load_dict_from_json_file(result_file)
-        #    os.rename(result_file, result_file+".bak")
-        #    new_results = {}
-        #    new_results['seed'] = args.seed
-        #    new_results['trainset'] = {'mean': results["NLL_est._trainset"][0],
-        #                               'stderror': results["NLL_est._trainset"][1]}
-        #    new_results['validset'] = {'mean': results["NLL_est._validset"][0],
-        #                               'stderror': results["NLL_est._validset"][1]}
-        #    new_results['testset'] = {'mean': results["NLL_est._testset"][0],
-        #                              'stderror': results["NLL_est._testset"][1]}
-
-        #    utils.save_dict_to_json_file(result_file, {"NLL_estimate": new_results})
         results = utils.load_dict_from_json_file(result_file)['NLL_estimate']
 
     for dataset in ['trainset', 'validset', 'testset']:
