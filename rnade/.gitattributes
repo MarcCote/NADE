@@ -1,0 +1,2 @@
+binarized_mnist.hdf5 filter=lfs diff=lfs merge=lfs -text
+binarized_mnist.hdf5 filter=lfs diff=lfs merge=lfs -text
