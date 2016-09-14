@@ -4,9 +4,9 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='NADE',
+    name='ConvNADE',
     version='1.0.0',
-    author='Benigno Uria, Marc-Alexandre Côté, Karol Gregor, Iain Murray, Hugo Larochelle',
+    author='Marc-Alexandre Côté',
     author_email='marc-alexandre.cote@usherbrooke.ca',
     url='https://github.com/MarcCote/NADE',
     packages=find_packages(),
